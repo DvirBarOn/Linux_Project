@@ -18,9 +18,10 @@ typedef struct {
 Graph *createGraph(int n) {
     Graph *g = malloc(sizeof(Graph));
     g->numVertices = n;
-    g->adj = malloc(n * sizeof(Edge*));
-    for (int i = 0; i < n; i++)
+    g->adj = malloc(n * sizeof(Edge *));
+    for (int i = 0; i < n; i++) {
         g->adj[i] = NULL;
+    }
     return g;
 }
 
@@ -35,7 +36,7 @@ void addEdge(Graph *g, int from, int to, int w) {
 void freeGraph(Graph *g) {
     for (int i = 0; i < g->numVertices; i++) {
         Edge *cur = g->adj[i];
-        while (cur) {
+        while (cur != NULL) {
             Edge *tmp = cur;
             cur = cur->next;
             free(tmp);
@@ -46,22 +47,25 @@ void freeGraph(Graph *g) {
 }
 
 int minDist(int dist[], int visited[], int n) {
-    int min = INF, idx = -1;
+    int min = INF;
+    int idx = -1;
+
     for (int i = 0; i < n; i++) {
         if (!visited[i] && dist[i] < min) {
             min = dist[i];
             idx = i;
         }
     }
+
     return idx;
 }
 
-// Prints: node -> node -> ... -> node  (arrows BETWEEN nodes, not after)
 void printPath(int parent[], int v) {
     if (parent[v] == -1) {
         printf("%d", v);
         return;
     }
+
     printPath(parent, parent[v]);
     printf(" -> %d", v);
 }
@@ -83,66 +87,74 @@ void dijkstra(Graph *g, int src, int dest) {
 
     for (int i = 0; i < n; i++) {
         int u = minDist(dist, visited, n);
-        if (u == -1) break;
+
+        if (u == -1) {
+            break;
+        }
 
         visited[u] = 1;
 
         Edge *cur = g->adj[u];
-        while (cur) {
+        while (cur != NULL) {
             int v = cur->to;
             int w = cur->weight;
+
             if (!visited[v] && dist[u] != INF && dist[u] + w < dist[v]) {
                 dist[v] = dist[u] + w;
                 parent[v] = u;
             }
+
             cur = cur->next;
         }
     }
 
-    // src == dest: print node, then 0
     if (src == dest) {
         printf("%d\n", src);
         printf("0\n");
         return;
     }
 
-    // no path
     if (dist[dest] == INF) {
         printf("No path found\n");
         return;
     }
 
-    // print full path, then total weight
     printPath(parent, dest);
     printf("\n");
     printf("%d\n", dist[dest]);
 }
 
-int main() {
-    FILE *fp = fopen("Graph.txt", "r");
+Graph *loadGraphFromFile(const char *filename, int *src, int *dest) {
+    FILE *fp = fopen(filename, "r");
     if (!fp) {
         printf("File error\n");
-        return 1;
+        return NULL;
     }
 
     int N, M;
-    fscanf(fp, "%d %d", &N, &M);
+    if (fscanf(fp, "%d %d", &N, &M) != 2) {
+        fclose(fp);
+        return NULL;
+    }
 
     Graph *g = createGraph(N);
 
     int u, v, w;
     for (int i = 0; i < M; i++) {
-        fscanf(fp, "%d %d %d", &u, &v, &w);
+        if (fscanf(fp, "%d %d %d", &u, &v, &w) != 3) {
+            freeGraph(g);
+            fclose(fp);
+            return NULL;
+        }
         addEdge(g, u, v, w);
     }
 
-    int src, dest;
-    fscanf(fp, "%d %d", &src, &dest);
+    if (fscanf(fp, "%d %d", src, dest) != 2) {
+        freeGraph(g);
+        fclose(fp);
+        return NULL;
+    }
 
     fclose(fp);
-
-    dijkstra(g, src, dest);
-
-    freeGraph(g);
-    return 0;
+    return g;
 }

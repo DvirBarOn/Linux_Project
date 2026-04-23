@@ -6,6 +6,5 @@ int main(void) {
     printf("my name is Noam");
     printf("elie");
     return 0;
-    
 
 }

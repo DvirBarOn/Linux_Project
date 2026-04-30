@@ -15,18 +15,47 @@ typedef struct {
     Edge **adj;
 } Graph;
 
+typedef struct {
+    int found;
+    int distance;
+    int *path;
+    int pathLength;
+} DijkstraResult;
+
 Graph *createGraph(int n) {
+    if (n <= 0) {
+        return NULL;
+    }
+
     Graph *g = malloc(sizeof(Graph));
+    if (g == NULL) {
+        return NULL;
+    }
+
     g->numVertices = n;
     g->adj = malloc(n * sizeof(Edge *));
+    if (g->adj == NULL) {
+        free(g);
+        return NULL;
+    }
+
     for (int i = 0; i < n; i++) {
         g->adj[i] = NULL;
     }
+
     return g;
 }
 
 void addEdge(Graph *g, int from, int to, int w) {
+    if (g == NULL) {
+        return;
+    }
+
     Edge *e = malloc(sizeof(Edge));
+    if (e == NULL) {
+        return;
+    }
+
     e->to = to;
     e->weight = w;
     e->next = g->adj[from];
@@ -34,6 +63,10 @@ void addEdge(Graph *g, int from, int to, int w) {
 }
 
 void freeGraph(Graph *g) {
+    if (g == NULL) {
+        return;
+    }
+
     for (int i = 0; i < g->numVertices; i++) {
         Edge *cur = g->adj[i];
         while (cur != NULL) {
@@ -42,6 +75,7 @@ void freeGraph(Graph *g) {
             free(tmp);
         }
     }
+
     free(g->adj);
     free(g);
 }
@@ -60,22 +94,33 @@ int minDist(int dist[], int visited[], int n) {
     return idx;
 }
 
-void printPath(int parent[], int v) {
-    if (parent[v] == -1) {
-        printf("%d", v);
-        return;
+DijkstraResult dijkstra(Graph *g, int src, int dest) {
+    DijkstraResult result;
+    result.found = 0;
+    result.distance = 0;
+    result.path = NULL;
+    result.pathLength = 0;
+
+    if (g == NULL) {
+        return result;
     }
 
-    printPath(parent, parent[v]);
-    printf(" -> %d", v);
-}
-
-void dijkstra(Graph *g, int src, int dest) {
     int n = g->numVertices;
 
-    int dist[n];
-    int visited[n];
-    int parent[n];
+    if (src < 0 || src >= n || dest < 0 || dest >= n) {
+        return result;
+    }
+
+    int *dist = malloc(n * sizeof(int));
+    int *visited = malloc(n * sizeof(int));
+    int *parent = malloc(n * sizeof(int));
+
+    if (dist == NULL || visited == NULL || parent == NULL) {
+        free(dist);
+        free(visited);
+        free(parent);
+        return result;
+    }
 
     for (int i = 0; i < n; i++) {
         dist[i] = INF;
@@ -109,19 +154,93 @@ void dijkstra(Graph *g, int src, int dest) {
     }
 
     if (src == dest) {
-        printf("%d\n", src);
-        printf("0\n");
-        return;
+        result.found = 1;
+        result.distance = 0;
+        result.pathLength = 1;
+        result.path = malloc(sizeof(int));
+        if (result.path != NULL) {
+            result.path[0] = src;
+        } else {
+            result.found = 0;
+            result.pathLength = 0;
+        }
+
+        free(dist);
+        free(visited);
+        free(parent);
+        return result;
     }
 
     if (dist[dest] == INF) {
+        free(dist);
+        free(visited);
+        free(parent);
+        return result;
+    }
+
+    int count = 0;
+    int current = dest;
+    while (current != -1) {
+        count++;
+        current = parent[current];
+    }
+
+    result.path = malloc(count * sizeof(int));
+    if (result.path == NULL) {
+        free(dist);
+        free(visited);
+        free(parent);
+        return result;
+    }
+
+    current = dest;
+    for (int i = count - 1; i >= 0; i--) {
+        result.path[i] = current;
+        current = parent[current];
+    }
+
+    result.found = 1;
+    result.distance = dist[dest];
+    result.pathLength = count;
+
+    free(dist);
+    free(visited);
+    free(parent);
+
+    return result;
+}
+
+void freeDijkstraResult(DijkstraResult *result) {
+    if (result == NULL) {
+        return;
+    }
+
+    free(result->path);
+    result->path = NULL;
+    result->pathLength = 0;
+    result->found = 0;
+    result->distance = 0;
+}
+
+void printDijkstraResult(const DijkstraResult *result) {
+    if (result == NULL) {
+        return;
+    }
+
+    if (!result->found) {
         printf("No path found\n");
         return;
     }
 
-    printPath(parent, dest);
+    for (int i = 0; i < result->pathLength; i++) {
+        if (i > 0) {
+            printf(" -> ");
+        }
+        printf("%d", result->path[i]);
+    }
+
     printf("\n");
-    printf("%d\n", dist[dest]);
+    printf("%d\n", result->distance);
 }
 
 Graph *loadGraphFromFile(const char *filename, int *src, int *dest) {
@@ -137,7 +256,17 @@ Graph *loadGraphFromFile(const char *filename, int *src, int *dest) {
         return NULL;
     }
 
+    if (N <= 0 || M < 0) {
+        printf("Invalid input\n");
+        fclose(fp);
+        return NULL;
+    }
+
     Graph *g = createGraph(N);
+    if (g == NULL) {
+        fclose(fp);
+        return NULL;
+    }
 
     int u, v, w;
     for (int i = 0; i < M; i++) {
@@ -146,10 +275,25 @@ Graph *loadGraphFromFile(const char *filename, int *src, int *dest) {
             fclose(fp);
             return NULL;
         }
+
+        if (u < 0 || v < 0 || w < 0 || u >= N || v >= N) {
+            printf("Invalid input\n");
+            freeGraph(g);
+            fclose(fp);
+            return NULL;
+        }
+
         addEdge(g, u, v, w);
     }
 
     if (fscanf(fp, "%d %d", src, dest) != 2) {
+        freeGraph(g);
+        fclose(fp);
+        return NULL;
+    }
+
+    if (*src < 0 || *dest < 0 || *src >= N || *dest >= N) {
+        printf("Invalid input\n");
         freeGraph(g);
         fclose(fp);
         return NULL;

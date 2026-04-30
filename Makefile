@@ -1,15 +1,18 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -std=c99
-RAYLIB = -lraylib -lm
+BUILD_DIR = cmake-build-debug
+
+.PHONY: milestone1 milestone2 milestone3 clean
 
 milestone1:
-	$(CC) $(CFLAGS) main.c Dijkstra.c -o dijkstra
+	cmake -S . -B $(BUILD_DIR)
+	cmake --build $(BUILD_DIR) --target dijkstra
 
 milestone2:
-	$(CC) $(CFLAGS) main.c Dijkstra.c GraphVisual.c -o sim $(RAYLIB)
+	cmake -S . -B $(BUILD_DIR)
+	cmake --build $(BUILD_DIR) --target sim
 
 milestone3:
-	$(CC) $(CFLAGS) main.c Dijkstra.c GraphVisual.c -o sim $(RAYLIB)
+	cmake -S . -B $(BUILD_DIR)
+	cmake --build $(BUILD_DIR) --target sim
 
 clean:
-	rm -f dijkstra sim *.o
+	rm -rf $(BUILD_DIR)

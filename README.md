@@ -1,48 +1,31 @@
-# Operating Systems Project
+# Operating Systems Project – Graph Simulation
 
 ## Participants
-Dvir Baron  
-Itay Chapnitsky  
-Noam Cohen  
-Elie Bensoussan
+- Dvir Baron
+- Itay Chapnitsky
+- Noam Cohen
+- Elie Bensoussan
 
 ---
 
-## Milestone 1 - Dijkstra
+## Project Description
+This project implements a directed weighted graph simulation in milestones.
 
-### Compile
+### Main Files
+- `Dijkstra.c` – graph loading and Dijkstra shortest path algorithm
+- `Dijkstra_main.c` – milestone 1 terminal program
+- `GraphVisual.c` – GUI graph visualization and milestone 3 animation
+- `main.c` – simulator entry point
+- `Graph.txt` – input file example
+- `CMakeLists.txt` – CMake build configuration
+- `Makefile` – unified milestone build targets
+
+---
+
+## Build and Run Commands
+
+### Milestone 1 – Dijkstra
+
+#### Build
+```bash
 make milestone1
-
-### Run
-./dijkstra Graph.txt
-
-### Description
-Reads a directed weighted graph from a file and computes the shortest path using Dijkstra algorithm.  
-The program prints the shortest path and the total weight.
-
----
-
-## Milestone 2 - Graph GUI
-
-### Compile
-make milestone2
-
-### Run
-./sim Graph.txt
-
-### Description
-Displays the graph using raylib.  
-Each node is represented as a shape and each edge is displayed with direction and weight.
-
----
-
-## Milestone 3 - Animation
-
-### Compile
-make milestone3
-
-### Run
-./sim Graph.txt
-
-### Description
-Displays the graph and animates a moving entity along the shortest path calculated by Dijkstra.

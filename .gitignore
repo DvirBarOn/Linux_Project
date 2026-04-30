@@ -1,2 +1,15 @@
-/secrets.txt
+# IDE files
 .idea/
+.vscode/
+
+# CMake build folders
+cmake-build-debug/
+cmake-build-release/
+cmake-build-*/
+
+# Executables
+*.exe
+*.out
+
+# macOS files
+.DS_Store

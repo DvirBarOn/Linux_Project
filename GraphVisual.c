@@ -36,6 +36,7 @@ void freeGraph(Graph *g);
 #define NODE_RADIUS  28
 #define ARROW_HEAD   12
 #define ARROW_ANGLE  0.42f
+#define EDGE_OFFSET  6.0f
 
 #define BG_COLOR        (Color){15, 17, 26, 255}
 #define NODE_COLOR      (Color){40, 120, 220, 255}
@@ -62,11 +63,35 @@ typedef struct {
     int dest;
 } VisGraph;
 
+/* ===== helpers ===== */
+
+/* Compute the offset start/end points of an edge (same formula used everywhere) */
+static void getEdgeEndpoints(VisGraph *vg, int from, int to,
+                              Vector2 *start, Vector2 *end) {
+    Vector2 p1 = vg->pos[from];
+    Vector2 p2 = vg->pos[to];
+
+    float dx  = p2.x - p1.x;
+    float dy  = p2.y - p1.y;
+    float len = sqrtf(dx * dx + dy * dy);
+
+    float nx = dx / len;
+    float ny = dy / len;
+    float ox = -ny * EDGE_OFFSET;
+    float oy =  nx * EDGE_OFFSET;
+
+    start->x = p1.x + nx * NODE_RADIUS + ox;
+    start->y = p1.y + ny * NODE_RADIUS + oy;
+
+    end->x = p2.x - nx * NODE_RADIUS + ox;
+    end->y = p2.y - ny * NODE_RADIUS + oy;
+}
+
 static void computeLayout(VisGraph *vg, int W, int H) {
     int n = vg->numVertices;
     float cx = W / 2.0f;
     float cy = H / 2.0f;
-    float r = fminf(W, H) * 0.36f;
+    float r  = fminf(W, H) * 0.36f;
 
     if (n == 1) {
         vg->pos[0] = (Vector2){cx, cy};
@@ -82,15 +107,10 @@ static void computeLayout(VisGraph *vg, int W, int H) {
 
 static int loadGraphVisual(const char *path, VisGraph *vg) {
     FILE *fp = fopen(path, "r");
-    if (!fp) {
-        return 0;
-    }
+    if (!fp) return 0;
 
     int N, M;
-    if (fscanf(fp, "%d %d", &N, &M) != 2) {
-        fclose(fp);
-        return 0;
-    }
+    if (fscanf(fp, "%d %d", &N, &M) != 2) { fclose(fp); return 0; }
 
     if (N <= 0 || N > MAX_VERTICES || M < 0 || M > MAX_VERTICES * MAX_VERTICES) {
         fclose(fp);
@@ -98,7 +118,7 @@ static int loadGraphVisual(const char *path, VisGraph *vg) {
     }
 
     vg->numVertices = N;
-    vg->numEdges = M;
+    vg->numEdges    = M;
 
     for (int i = 0; i < M; i++) {
         if (fscanf(fp, "%d %d %d",
@@ -121,9 +141,7 @@ static int loadGraphVisual(const char *path, VisGraph *vg) {
 
 static void drawArrowHead(Vector2 tip, float dx, float dy) {
     float len = sqrtf(dx * dx + dy * dy);
-    if (len < 0.001f) {
-        return;
-    }
+    if (len < 0.001f) return;
 
     dx /= len;
     dy /= len;
@@ -132,7 +150,6 @@ static void drawArrowHead(Vector2 tip, float dx, float dy) {
         tip.x - ARROW_HEAD * (dx * cosf(ARROW_ANGLE) - dy * sinf(ARROW_ANGLE)),
         tip.y - ARROW_HEAD * (dy * cosf(ARROW_ANGLE) + dx * sinf(ARROW_ANGLE))
     };
-
     Vector2 b2 = {
         tip.x - ARROW_HEAD * (dx * cosf(ARROW_ANGLE) + dy * sinf(ARROW_ANGLE)),
         tip.y - ARROW_HEAD * (dy * cosf(ARROW_ANGLE) - dx * sinf(ARROW_ANGLE))
@@ -146,6 +163,7 @@ static void drawEdge(VisGraph *vg, int ei, Font font) {
     Vector2 p1 = vg->pos[e->from];
     Vector2 p2 = vg->pos[e->to];
 
+    /* Self-loop */
     if (e->from == e->to) {
         Vector2 lc = {p1.x, p1.y - NODE_RADIUS - 18};
         DrawCircleLines((int)lc.x, (int)lc.y, 18, EDGE_COLOR);
@@ -157,28 +175,14 @@ static void drawEdge(VisGraph *vg, int ei, Font font) {
         return;
     }
 
-    float dx = p2.x - p1.x;
-    float dy = p2.y - p1.y;
-    float len = sqrtf(dx * dx + dy * dy);
+    Vector2 start, end;
+    getEdgeEndpoints(vg, e->from, e->to, &start, &end);
 
-    float nx = dx / len;
-    float ny = dy / len;
-
-    float ox = -ny * 6.0f;
-    float oy = nx * 6.0f;
-
-    Vector2 start = {
-        p1.x + nx * NODE_RADIUS + ox,
-        p1.y + ny * NODE_RADIUS + oy
-    };
-
-    Vector2 end = {
-        p2.x - nx * NODE_RADIUS + ox,
-        p2.y - ny * NODE_RADIUS + oy
-    };
+    float dx = end.x - start.x;
+    float dy = end.y - start.y;
 
     DrawLineEx(start, end, 2.0f, EDGE_COLOR);
-    drawArrowHead(end, nx, ny);
+    drawArrowHead(end, dx, dy);
 
     float mx = (start.x + end.x) / 2.0f;
     float my = (start.y + end.y) / 2.0f;
@@ -205,18 +209,12 @@ static void drawEdge(VisGraph *vg, int ei, Font font) {
 }
 
 static void drawNode(VisGraph *vg, int i, Font font) {
-    Vector2 p = vg->pos[i];
-    Color fill = NODE_COLOR;
+    Vector2 p    = vg->pos[i];
+    Color   fill = NODE_COLOR;
 
-    if (i == vg->src) {
-        fill = (Color){40, 180, 100, 255};
-    }
-    if (i == vg->dest) {
-        fill = (Color){220, 80, 80, 255};
-    }
-    if (i == vg->src && i == vg->dest) {
-        fill = (Color){180, 80, 200, 255};
-    }
+    if (i == vg->src)                        fill = (Color){40, 180, 100, 255};
+    if (i == vg->dest)                       fill = (Color){220, 80, 80, 255};
+    if (i == vg->src && i == vg->dest)       fill = (Color){180, 80, 200, 255};
 
     DrawCircle((int)p.x, (int)p.y, NODE_RADIUS + 5, (Color){fill.r, fill.g, fill.b, 60});
     DrawCircle((int)p.x, (int)p.y, NODE_RADIUS, fill);
@@ -233,27 +231,21 @@ static void drawNode(VisGraph *vg, int i, Font font) {
 
 static int getEdgeWeight(const VisGraph *vg, int from, int to) {
     for (int i = 0; i < vg->numEdges; i++) {
-        if (vg->edges[i].from == from && vg->edges[i].to == to) {
+        if (vg->edges[i].from == from && vg->edges[i].to == to)
             return vg->edges[i].weight;
-        }
     }
     return 1;
 }
+
+/* ===== main entry point ===== */
 
 void runGraphVisualizer(const char *filename) {
     const int W = 900;
     const int H = 700;
 
-    Graph *algoGraph = NULL;
-    DijkstraResult result;
-    result.found = 0;
-    result.distance = 0;
-    result.path = NULL;
-    result.pathLength = 0;
-
     int src, dest;
+    Graph *algoGraph = loadGraphFromFile(filename, &src, &dest);
 
-    algoGraph = loadGraphFromFile(filename, &src, &dest);
     if (algoGraph == NULL) {
         InitWindow(450, 120, "Error");
         while (!WindowShouldClose()) {
@@ -266,8 +258,7 @@ void runGraphVisualizer(const char *filename) {
         return;
     }
 
-    result = dijkstra(algoGraph, src, dest);
-
+    DijkstraResult result = dijkstra(algoGraph, src, dest);
     printf("Dijkstra result:\n");
     printDijkstraResult(&result);
 
@@ -294,37 +285,33 @@ void runGraphVisualizer(const char *filename) {
 
     Font font = GetFontDefault();
 
-    int isPlaying = 0;
-    int currentSegment = 0;
+    int   isPlaying      = 0;
+    int   currentSegment = 0;
+    int   currentStep    = 0;
+    int   totalSteps     = 1;
+    float stepTimer      = 0.0f;
 
-    int isWaitingAtNode = 0;
-    float waitTimer = 0.0f;
-
-    int currentStep = 0;
-    int totalSteps = 1;
-    float stepTimer = 0.0f;
+    int   isWaitingAtNode = 0;
+    float waitTimer       = 0.0f;
 
     if (result.found && result.pathLength > 1) {
         totalSteps = getEdgeWeight(&vg, result.path[0], result.path[1]);
-        if (totalSteps <= 0) {
-            totalSteps = 1;
-        }
+        if (totalSteps <= 0) totalSteps = 1;
     }
 
     while (!WindowShouldClose()) {
 
+        /* ---- animation update ---- */
         if (isPlaying && result.found && result.pathLength > 1) {
 
             if (isWaitingAtNode) {
                 waitTimer += GetFrameTime();
-
                 if (waitTimer >= 1.0f) {
                     isWaitingAtNode = 0;
-                    waitTimer = 0.0f;
+                    waitTimer       = 0.0f;
                 }
             } else {
                 stepTimer += GetFrameTime();
-
                 if (stepTimer >= 0.3f) {
                     stepTimer = 0.0f;
                     currentStep++;
@@ -335,106 +322,109 @@ void runGraphVisualizer(const char *filename) {
 
                         if (currentSegment >= result.pathLength - 1) {
                             currentSegment = result.pathLength - 1;
-                            isPlaying = 0;
+                            isPlaying      = 0;
                         } else {
                             totalSteps = getEdgeWeight(&vg,
-                                                       result.path[currentSegment],
-                                                       result.path[currentSegment + 1]);
-                            if (totalSteps <= 0) {
-                                totalSteps = 1;
-                            }
+                                result.path[currentSegment],
+                                result.path[currentSegment + 1]);
+                            if (totalSteps <= 0) totalSteps = 1;
 
                             isWaitingAtNode = 1;
-                            waitTimer = 0.0f;
+                            waitTimer       = 0.0f;
                         }
                     }
                 }
             }
         }
 
+        /* ---- draw ---- */
         BeginDrawing();
         ClearBackground(BG_COLOR);
 
-        Rectangle button = {W - 140, 20, 100, 36};
-
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-            CheckCollisionPointRec(GetMousePosition(), button)) {
-
-            if (!isPlaying && result.found && result.pathLength > 1 &&
-                currentSegment >= result.pathLength - 1) {
-                currentSegment = 0;
-                currentStep = 0;
-                stepTimer = 0.0f;
-                isWaitingAtNode = 0;
-                waitTimer = 0.0f;
-
-                totalSteps = getEdgeWeight(&vg, result.path[0], result.path[1]);
-                if (totalSteps <= 0) {
-                    totalSteps = 1;
-                }
-            }
-
-            isPlaying = !isPlaying;
-        }
-
-        for (int x = 0; x < W; x += 40) {
-            for (int y = 0; y < H; y += 40) {
+        /* dot grid background */
+        for (int x = 0; x < W; x += 40)
+            for (int y = 0; y < H; y += 40)
                 DrawPixel(x, y, (Color){60, 70, 100, 80});
-            }
-        }
 
+        /* title */
         const char *title = "Graph Visualizer";
         Vector2 ts = MeasureTextEx(font, title, 22, 1);
         DrawTextEx(font, title, (Vector2){(W - ts.x) / 2, 14}, 22, 1, TITLE_COLOR);
 
+        /* legend */
         DrawCircle(30, H - 60, 10, (Color){40, 180, 100, 255});
         DrawTextEx(font, "Source", (Vector2){46, H - 68}, 14, 1, WHITE);
-
         DrawCircle(30, H - 35, 10, (Color){220, 80, 80, 255});
-        DrawTextEx(font, "Dest", (Vector2){46, H - 43}, 14, 1, WHITE);
+        DrawTextEx(font, "Dest",   (Vector2){46, H - 43}, 14, 1, WHITE);
 
-        for (int i = 0; i < vg.numEdges; i++) {
-            drawEdge(&vg, i, font);
-        }
+        /* edges then nodes */
+        for (int i = 0; i < vg.numEdges; i++)    drawEdge(&vg, i, font);
+        for (int i = 0; i < vg.numVertices; i++) drawNode(&vg, i, font);
 
-        for (int i = 0; i < vg.numVertices; i++) {
-            drawNode(&vg, i, font);
-        }
-
+        /* ---- entity (yellow dot) ---- */
         if (result.found && result.pathLength > 0) {
             Vector2 entityPos;
 
             if (result.pathLength == 1) {
-                int v = result.path[0];
-                entityPos = vg.pos[v];
+                /* Only one node in path */
+                entityPos = vg.pos[result.path[0]];
+
             } else if (currentSegment >= result.pathLength - 1) {
-                int v = result.path[result.pathLength - 1];
-                entityPos = vg.pos[v];
+                /* Arrived at destination */
+                entityPos = vg.pos[result.path[result.pathLength - 1]];
+
             } else {
+                /* Interpolate along the exact same offset line used by drawEdge() */
                 int fromVertex = result.path[currentSegment];
-                int toVertex = result.path[currentSegment + 1];
+                int toVertex   = result.path[currentSegment + 1];
 
-                Vector2 fromPos = vg.pos[fromVertex];
-                Vector2 toPos = vg.pos[toVertex];
+                Vector2 start, end;
+                getEdgeEndpoints(&vg, fromVertex, toVertex, &start, &end);
 
-                float t = 0.0f;
-                if (totalSteps > 0) {
-                    t = (float)currentStep / (float)totalSteps;
-                }
+                float t = (totalSteps > 0)
+                          ? (float)currentStep / (float)totalSteps
+                          : 0.0f;
 
-                entityPos.x = fromPos.x + (toPos.x - fromPos.x) * t;
-                entityPos.y = fromPos.y + (toPos.y - fromPos.y) * t;
+                entityPos.x = start.x + (end.x - start.x) * t;
+                entityPos.y = start.y + (end.y - start.y) * t;
             }
 
-            DrawCircle((int)entityPos.x + 38, (int)entityPos.y, 10, YELLOW);
-            DrawTextEx(font, "Entity", (Vector2){entityPos.x + 52, entityPos.y - 8}, 14, 1, WHITE);
+            /* Draw dot directly on entityPos — no manual offset */
+            DrawCircle((int)entityPos.x, (int)entityPos.y, 10, YELLOW);
+            DrawTextEx(font, "Entity",
+                       (Vector2){entityPos.x + 14, entityPos.y - 8},
+                       14, 1, WHITE);
         }
 
+        /* destination reached banner */
         if (result.found && result.pathLength > 0 &&
             currentSegment >= result.pathLength - 1) {
             DrawTextEx(font, "Reached destination!",
                        (Vector2){W / 2.0f - 110, H - 40},
                        22, 1, YELLOW);
+        }
+
+        /* play / stop button */
+        Rectangle button = {W - 140, 20, 100, 36};
+
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+            CheckCollisionPointRec(GetMousePosition(), button)) {
+
+            /* restart if animation finished */
+            if (!isPlaying && result.found && result.pathLength > 1 &&
+                currentSegment >= result.pathLength - 1) {
+
+                currentSegment  = 0;
+                currentStep     = 0;
+                stepTimer       = 0.0f;
+                isWaitingAtNode = 0;
+                waitTimer       = 0.0f;
+
+                totalSteps = getEdgeWeight(&vg, result.path[0], result.path[1]);
+                if (totalSteps <= 0) totalSteps = 1;
+            }
+
+            isPlaying = !isPlaying;
         }
 
         DrawRectangleRounded(button, 0.3f, 8, isPlaying ? ORANGE : DARKGREEN);
@@ -447,7 +437,6 @@ void runGraphVisualizer(const char *filename) {
     }
 
     CloseWindow();
-
     freeDijkstraResult(&result);
     freeGraph(algoGraph);
 }

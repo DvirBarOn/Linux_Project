@@ -6,6 +6,7 @@ set(CMAKE_C_STANDARD 99)
 add_executable(dijkstra
         Dijkstra_main.c
         Dijkstra.c
+        Dijkstra.h
 )
 
 add_executable(sim

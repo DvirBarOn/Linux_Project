@@ -1,7 +1,19 @@
 # ---------- toolchain ----------
 CC      := gcc
 CFLAGS  := -Wall -Wextra -O2 -std=c11
-RAYLIB  := -lraylib -lm -lpthread -ldl -lrt -lX11
+
+# Detect platform for raylib linking
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    # macOS with Homebrew raylib
+    CFLAGS += -I/opt/homebrew/include
+    RAYLIB := -L/opt/homebrew/lib -lraylib -lm \
+              -framework CoreVideo -framework IOKit -framework Cocoa \
+              -framework GLUT -framework OpenGL
+else
+    # Linux
+    RAYLIB := -lraylib -lm -lpthread -ldl -lrt -lX11
+endif
 
 # ---------- milestone 1: terminal Dijkstra ----------
 milestone1: dijkstra
@@ -16,8 +28,6 @@ sim: Dijkstra.c GraphVisual.c main.c Dijkstra.h
 	$(CC) $(CFLAGS) Dijkstra.c GraphVisual.c main.c -o sim $(RAYLIB)
 
 # ---------- milestone 4: multi-traveler + fork ----------
-# (Same sources as milestone3 in this layout; the multi-traveler logic lives
-#  inside GraphVisual.c. We produce a separate binary name for clarity.)
 milestone4: sim4
 
 sim4: Dijkstra.c GraphVisual.c main.c Dijkstra.h

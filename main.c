@@ -12,3 +12,4 @@ int main(int argc, char *argv[]) {
     runGraphVisualizer(argv[1]);
     return 0;
 }
+

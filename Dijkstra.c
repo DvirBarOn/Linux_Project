@@ -1,48 +1,48 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <limits.h>
+#include "Dijkstra.h"
 
 #define INF INT_MAX
 
-typedef struct Edge {
-    int to;
-    int weight;
-    struct Edge *next;
-} Edge;
+/* Skip whitespace and '#' comment lines so input files can be self-documenting. */
+static void skipCommentsAndWS(FILE *fp) {
+    int c;
+    for (;;) {
+        do { c = fgetc(fp); } while (c != EOF && isspace(c));
+        if (c == '#') {
+            while (c != EOF && c != '\n') c = fgetc(fp);
+            continue;
+        }
+        if (c != EOF) ungetc(c, fp);
+        return;
+    }
+}
 
-typedef struct {
-    int numVertices;
-    Edge **adj;
-} Graph;
-
-typedef struct {
-    int found;
-    int distance;
-    int *path;
-    int pathLength;
-} DijkstraResult;
+/* Read one int, skipping comments first. Returns 1 on success, 0 on EOF/error. */
+static int readInt(FILE *fp, int *out) {
+    skipCommentsAndWS(fp);
+    return fscanf(fp, "%d", out) == 1;
+}
 
 Graph *createGraph(int n) {
     if (n <= 0) {
         return NULL;
     }
-
     Graph *g = malloc(sizeof(Graph));
     if (g == NULL) {
         return NULL;
     }
-
     g->numVertices = n;
     g->adj = malloc(n * sizeof(Edge *));
     if (g->adj == NULL) {
         free(g);
         return NULL;
     }
-
     for (int i = 0; i < n; i++) {
         g->adj[i] = NULL;
     }
-
     return g;
 }
 
@@ -50,12 +50,10 @@ void addEdge(Graph *g, int from, int to, int w) {
     if (g == NULL) {
         return;
     }
-
     Edge *e = malloc(sizeof(Edge));
     if (e == NULL) {
         return;
     }
-
     e->to = to;
     e->weight = w;
     e->next = g->adj[from];
@@ -66,7 +64,6 @@ void freeGraph(Graph *g) {
     if (g == NULL) {
         return;
     }
-
     for (int i = 0; i < g->numVertices; i++) {
         Edge *cur = g->adj[i];
         while (cur != NULL) {
@@ -75,22 +72,19 @@ void freeGraph(Graph *g) {
             free(tmp);
         }
     }
-
     free(g->adj);
     free(g);
 }
 
-int minDist(int dist[], int visited[], int n) {
+static int minDist(int dist[], int visited[], int n) {
     int min = INF;
     int idx = -1;
-
     for (int i = 0; i < n; i++) {
         if (!visited[i] && dist[i] < min) {
             min = dist[i];
             idx = i;
         }
     }
-
     return idx;
 }
 
@@ -104,9 +98,7 @@ DijkstraResult dijkstra(Graph *g, int src, int dest) {
     if (g == NULL) {
         return result;
     }
-
     int n = g->numVertices;
-
     if (src < 0 || src >= n || dest < 0 || dest >= n) {
         return result;
     }
@@ -114,7 +106,6 @@ DijkstraResult dijkstra(Graph *g, int src, int dest) {
     int *dist = malloc(n * sizeof(int));
     int *visited = malloc(n * sizeof(int));
     int *parent = malloc(n * sizeof(int));
-
     if (dist == NULL || visited == NULL || parent == NULL) {
         free(dist);
         free(visited);
@@ -127,28 +118,22 @@ DijkstraResult dijkstra(Graph *g, int src, int dest) {
         visited[i] = 0;
         parent[i] = -1;
     }
-
     dist[src] = 0;
 
     for (int i = 0; i < n; i++) {
         int u = minDist(dist, visited, n);
-
         if (u == -1) {
             break;
         }
-
         visited[u] = 1;
-
         Edge *cur = g->adj[u];
         while (cur != NULL) {
             int v = cur->to;
             int w = cur->weight;
-
             if (!visited[v] && dist[u] != INF && dist[u] + w < dist[v]) {
                 dist[v] = dist[u] + w;
                 parent[v] = u;
             }
-
             cur = cur->next;
         }
     }
@@ -164,7 +149,6 @@ DijkstraResult dijkstra(Graph *g, int src, int dest) {
             result.found = 0;
             result.pathLength = 0;
         }
-
         free(dist);
         free(visited);
         free(parent);
@@ -198,7 +182,6 @@ DijkstraResult dijkstra(Graph *g, int src, int dest) {
         result.path[i] = current;
         current = parent[current];
     }
-
     result.found = 1;
     result.distance = dist[dest];
     result.pathLength = count;
@@ -206,7 +189,6 @@ DijkstraResult dijkstra(Graph *g, int src, int dest) {
     free(dist);
     free(visited);
     free(parent);
-
     return result;
 }
 
@@ -214,7 +196,6 @@ void freeDijkstraResult(DijkstraResult *result) {
     if (result == NULL) {
         return;
     }
-
     free(result->path);
     result->path = NULL;
     result->pathLength = 0;
@@ -226,19 +207,16 @@ void printDijkstraResult(const DijkstraResult *result) {
     if (result == NULL) {
         return;
     }
-
     if (!result->found) {
         printf("No path found\n");
         return;
     }
-
     for (int i = 0; i < result->pathLength; i++) {
         if (i > 0) {
             printf(" -> ");
         }
         printf("%d", result->path[i]);
     }
-
     printf("\n");
     printf("%d\n", result->distance);
 }
@@ -251,11 +229,10 @@ Graph *loadGraphFromFile(const char *filename, int *src, int *dest) {
     }
 
     int N, M;
-    if (fscanf(fp, "%d %d", &N, &M) != 2) {
+    if (!readInt(fp, &N) || !readInt(fp, &M)) {
         fclose(fp);
         return NULL;
     }
-
     if (N <= 0 || M < 0) {
         printf("Invalid input\n");
         fclose(fp);
@@ -270,28 +247,25 @@ Graph *loadGraphFromFile(const char *filename, int *src, int *dest) {
 
     int u, v, w;
     for (int i = 0; i < M; i++) {
-        if (fscanf(fp, "%d %d %d", &u, &v, &w) != 3) {
+        if (!readInt(fp, &u) || !readInt(fp, &v) || !readInt(fp, &w)) {
             freeGraph(g);
             fclose(fp);
             return NULL;
         }
-
         if (u < 0 || v < 0 || w < 0 || u >= N || v >= N) {
             printf("Invalid input\n");
             freeGraph(g);
             fclose(fp);
             return NULL;
         }
-
         addEdge(g, u, v, w);
     }
 
-    if (fscanf(fp, "%d %d", src, dest) != 2) {
+    if (!readInt(fp, src) || !readInt(fp, dest)) {
         freeGraph(g);
         fclose(fp);
         return NULL;
     }
-
     if (*src < 0 || *dest < 0 || *src >= N || *dest >= N) {
         printf("Invalid input\n");
         freeGraph(g);
@@ -300,5 +274,53 @@ Graph *loadGraphFromFile(const char *filename, int *src, int *dest) {
     }
 
     fclose(fp);
+    return g;
+}
+
+/* Milestone 4 loader: reads the graph and leaves the file open so the caller
+ * can continue parsing traveler lines (count, then src/dest pairs). */
+Graph *loadGraphOnly(const char *filename, FILE **out_fp) {
+    *out_fp = NULL;
+
+    FILE *fp = fopen(filename, "r");
+    if (!fp) {
+        printf("File error\n");
+        return NULL;
+    }
+
+    int N, M;
+    if (!readInt(fp, &N) || !readInt(fp, &M)) {
+        fclose(fp);
+        return NULL;
+    }
+    if (N <= 0 || M < 0) {
+        printf("Invalid input\n");
+        fclose(fp);
+        return NULL;
+    }
+
+    Graph *g = createGraph(N);
+    if (g == NULL) {
+        fclose(fp);
+        return NULL;
+    }
+
+    int u, v, w;
+    for (int i = 0; i < M; i++) {
+        if (!readInt(fp, &u) || !readInt(fp, &v) || !readInt(fp, &w)) {
+            freeGraph(g);
+            fclose(fp);
+            return NULL;
+        }
+        if (u < 0 || v < 0 || w < 0 || u >= N || v >= N) {
+            printf("Invalid input\n");
+            freeGraph(g);
+            fclose(fp);
+            return NULL;
+        }
+        addEdge(g, u, v, w);
+    }
+
+    *out_fp = fp;
     return g;
 }

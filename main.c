@@ -1,5 +1,6 @@
 #include <stdio.h>
 
+/* declaration from GraphVisual.c */
 void runGraphVisualizer(const char *filename);
 
 int main(int argc, char *argv[]) {

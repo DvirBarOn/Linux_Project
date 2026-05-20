@@ -206,9 +206,6 @@ static void drawNode(VisGraph *vg, int i, Font font,
     Vector2 p = vg->pos[i];
     Color fill = NODE_COLOR;
 
-    /* If any traveler uses this node as src/dest, tint accordingly.
-     * Source-tint wins over dest-tint if a node is both, and we keep
-     * the simple green/red so the parent test criteria still hold. */
     int isSrc = 0, isDest = 0;
     for (int t = 0; t < numTravelers; t++) {
         if (travelers[t].src == i)  isSrc = 1;
@@ -241,22 +238,22 @@ static int getEdgeWeight(const VisGraph *vg, int from, int to) {
 /* Distinct, easy-to-tell-apart colors for travelers. */
 static Color travelerColor(int idx) {
     static const Color palette[] = {
-        {255, 220,  60, 255},   /* yellow      */
-        {  0, 200, 255, 255},   /* cyan        */
-        {255, 120, 200, 255},   /* pink        */
-        {120, 255, 120, 255},   /* lime green  */
-        {255, 140,  40, 255},   /* orange      */
-        {200, 120, 255, 255},   /* purple      */
-        {255,  80,  80, 255},   /* red         */
-        { 80, 200, 160, 255},   /* teal        */
-        {220, 220, 220, 255},   /* light gray  */
-        {255, 200, 150, 255},   /* peach       */
-        {150, 200, 255, 255},   /* sky         */
-        {200, 255,  80, 255},   /* yellow-green*/
-        {255, 100, 150, 255},   /* rose        */
-        {100, 255, 220, 255},   /* mint        */
-        {180, 180, 255, 255},   /* lavender    */
-        {255, 180,  80, 255},   /* amber       */
+        {255, 220,  60, 255},
+        {  0, 200, 255, 255},
+        {255, 120, 200, 255},
+        {120, 255, 120, 255},
+        {255, 140,  40, 255},
+        {200, 120, 255, 255},
+        {255,  80,  80, 255},
+        { 80, 200, 160, 255},
+        {220, 220, 220, 255},
+        {255, 200, 150, 255},
+        {150, 200, 255, 255},
+        {200, 255,  80, 255},
+        {255, 100, 150, 255},
+        {100, 255, 220, 255},
+        {180, 180, 255, 255},
+        {255, 180,  80, 255},
     };
     int n = (int)(sizeof(palette) / sizeof(palette[0]));
     return palette[idx % n];
@@ -270,11 +267,7 @@ static void childMain(void) {
 
     /* Wait for any signal. pause() returns -1 with errno=EINTR when a
      * signal arrives — at which point we exit cleanly. */
-    while (1) {
-        pause();
-        /* If we get here it means a signal was delivered. Time to go. */
-        break;
-    }
+    pause();
     exit(0);
 }
 
@@ -359,7 +352,6 @@ void runGraphVisualizer(const char *filename) {
         pid_t pid = fork();
         if (pid < 0) {
             perror("fork");
-            /* best effort: kill any already-spawned children before bailing */
             for (int k = 0; k < i; k++) {
                 if (travelers[k].pid > 0) {
                     kill(travelers[k].pid, SIGTERM);
@@ -373,8 +365,7 @@ void runGraphVisualizer(const char *filename) {
             return;
         }
         if (pid == 0) {
-            /* --- CHILD ---
-             * Free the parent's heap state we don't need; we won't touch it. */
+            /* --- CHILD --- */
             childMain();
             /* never returns */
         }
@@ -385,7 +376,6 @@ void runGraphVisualizer(const char *filename) {
     /* ---- Step 5: load visual graph + run animation ---- */
     VisGraph vg = {0};
     if (!loadVisGraph(filename, &vg)) {
-        /* shouldn't happen since we just read it, but be defensive */
         for (int i = 0; i < numTravelers; i++) {
             if (travelers[i].pid > 0) {
                 kill(travelers[i].pid, SIGTERM);
@@ -419,7 +409,6 @@ void runGraphVisualizer(const char *filename) {
             if (t->totalSteps <= 0) t->totalSteps = 1;
         } else {
             t->totalSteps = 1;
-            /* If path not found or only one node, mark as arrived immediately. */
             if (!t->result.found || t->result.pathLength <= 1) {
                 t->arrived = 1;
             }
@@ -490,17 +479,14 @@ void runGraphVisualizer(const char *filename) {
         BeginDrawing();
         ClearBackground(BG_COLOR);
 
-        /* dot grid background */
         for (int x = 0; x < W; x += 40)
             for (int y = 0; y < H; y += 40)
                 DrawPixel(x, y, (Color){60, 70, 100, 80});
 
-        /* title */
         const char *title = "Graph Visualizer - Milestone 4";
         Vector2 ts = MeasureTextEx(font, title, 22, 1);
         DrawTextEx(font, title, (Vector2){(W - ts.x) / 2, 14}, 22, 1, TITLE_COLOR);
 
-        /* edges then nodes */
         for (int i = 0; i < vg.numEdges; i++) drawEdge(&vg, i, font);
         for (int i = 0; i < vg.numVertices; i++)
             drawNode(&vg, i, font, travelers, numTravelers);
@@ -527,7 +513,6 @@ void runGraphVisualizer(const char *filename) {
                 entityPos.y = start.y + (end.y - start.y) * ratio;
             }
 
-            /* halo + filled circle so each color reads even on overlap */
             DrawCircle((int)entityPos.x, (int)entityPos.y, 14,
                        (Color){t->color.r, t->color.g, t->color.b, 80});
             DrawCircle((int)entityPos.x, (int)entityPos.y, 9, t->color);
@@ -556,7 +541,6 @@ void runGraphVisualizer(const char *filename) {
             DrawTextEx(font, line, (Vector2){panelX + 22, yy}, 14, 1, WHITE);
         }
 
-        /* "all done" banner */
         int allDone = 1;
         for (int i = 0; i < numTravelers; i++) {
             if (!travelers[i].arrived) { allDone = 0; break; }
@@ -567,13 +551,10 @@ void runGraphVisualizer(const char *filename) {
                        22, 1, YELLOW);
         }
 
-        /* play / stop button */
         Rectangle button = {W - 140, 20, 100, 36};
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
             CheckCollisionPointRec(GetMousePosition(), button)) {
 
-            /* if everyone finished, clicking restarts the animation but
-             * does NOT respawn children — they're already terminated. */
             if (!isPlaying && allDone) {
                 for (int i = 0; i < numTravelers; i++) {
                     Traveler *t = &travelers[i];
@@ -584,7 +565,6 @@ void runGraphVisualizer(const char *filename) {
                     t->isWaitingAtNode = 0;
                     t->waitTimer = 0.0f;
                     t->arrived = 0;
-                    /* leave signaled=1; children are already gone */
                     t->totalSteps = getEdgeWeight(&vg,
                         t->result.path[0], t->result.path[1]);
                     if (t->totalSteps <= 0) t->totalSteps = 1;

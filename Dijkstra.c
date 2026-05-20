@@ -6,6 +6,8 @@
 
 #define INF INT_MAX
 
+/* ===== helpers ===== */
+
 /* Skip whitespace and '#' comment lines so input files can be self-documenting. */
 static void skipCommentsAndWS(FILE *fp) {
     int c;
@@ -25,6 +27,8 @@ static int readInt(FILE *fp, int *out) {
     skipCommentsAndWS(fp);
     return fscanf(fp, "%d", out) == 1;
 }
+
+/* ===== graph lifecycle ===== */
 
 Graph *createGraph(int n) {
     if (n <= 0) {
@@ -75,6 +79,8 @@ void freeGraph(Graph *g) {
     free(g->adj);
     free(g);
 }
+
+/* ===== algorithm ===== */
 
 static int minDist(int dist[], int visited[], int n) {
     int min = INF;
@@ -220,6 +226,8 @@ void printDijkstraResult(const DijkstraResult *result) {
     printf("\n");
     printf("%d\n", result->distance);
 }
+
+/* ===== file loaders ===== */
 
 Graph *loadGraphFromFile(const char *filename, int *src, int *dest) {
     FILE *fp = fopen(filename, "r");

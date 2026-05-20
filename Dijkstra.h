@@ -1,6 +1,3 @@
-#ifndef LINUX_PROJECT_DIJSKRA_H
-#define LINUX_PROJECT_DIJSKRA_H
-
 #ifndef DIJKSTRA_H
 #define DIJKSTRA_H
 
@@ -45,7 +42,3 @@ Graph *loadGraphFromFile(const char *filename, int *src, int *dest);
 Graph *loadGraphOnly(const char *filename, FILE **out_fp);
 
 #endif /* DIJKSTRA_H */
-
-
-
-#endif //LINUX_PROJECT_DIJSKRA_H

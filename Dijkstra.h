@@ -32,13 +32,18 @@ void printDijkstraResult(const DijkstraResult *result);
 void freeDijkstraResult(DijkstraResult *result);
 
 /* ===== file loaders ===== */
-/* Milestone 1/3: loads graph + a single src/dest line at the end. */
 Graph *loadGraphFromFile(const char *filename, int *src, int *dest);
-
-/* Milestone 4: loads only the graph (N M then M edges). Leaves the file
- * positioned right after the last edge so the caller can keep reading
- * traveler lines from it. Returns the open FILE* via *out_fp on success,
- * or NULL graph on failure (in which case *out_fp is also NULL). */
 Graph *loadGraphOnly(const char *filename, FILE **out_fp);
+
+/* ===== path resolution =====
+ * Given a (possibly NULL) user-supplied path, return a strdup'd path to a
+ * readable Graph.txt-like file by searching:
+ *   1. the user-supplied path, if non-NULL
+ *   2. "./Graph.txt"
+ *   3. <directory of the running executable>/Graph.txt
+ *   4. SOURCE_DIR/Graph.txt  (set by CMake at compile time)
+ * Returns NULL if nothing is found. Caller must free() the result.
+ */
+char *resolveGraphPath(const char *userArg);
 
 #endif /* DIJKSTRA_H */

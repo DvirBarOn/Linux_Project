@@ -1,0 +1,50 @@
+[
+{
+  "directory": "/Users/eliebensoussan/Linux_Project/build",
+  "command": "/usr/bin/cc -DSOURCE_DIR=\\\"/Users/eliebensoussan/Linux_Project\\\"  -std=gnu11 -arch arm64 -Wall -Wextra -O2 -o CMakeFiles/dijkstra.dir/Dijkstra.c.o -c /Users/eliebensoussan/Linux_Project/Dijkstra.c",
+  "file": "/Users/eliebensoussan/Linux_Project/Dijkstra.c",
+  "output": "CMakeFiles/dijkstra.dir/Dijkstra.c.o"
+},
+{
+  "directory": "/Users/eliebensoussan/Linux_Project/build",
+  "command": "/usr/bin/cc -DSOURCE_DIR=\\\"/Users/eliebensoussan/Linux_Project\\\"  -std=gnu11 -arch arm64 -Wall -Wextra -O2 -o CMakeFiles/dijkstra.dir/Dijkstra_main.c.o -c /Users/eliebensoussan/Linux_Project/Dijkstra_main.c",
+  "file": "/Users/eliebensoussan/Linux_Project/Dijkstra_main.c",
+  "output": "CMakeFiles/dijkstra.dir/Dijkstra_main.c.o"
+},
+{
+  "directory": "/Users/eliebensoussan/Linux_Project/build",
+  "command": "/usr/bin/cc -DSOURCE_DIR=\\\"/Users/eliebensoussan/Linux_Project\\\" -isystem /opt/homebrew/include -std=gnu11 -arch arm64 -Wall -Wextra -O2 -o CMakeFiles/sim.dir/Dijkstra.c.o -c /Users/eliebensoussan/Linux_Project/Dijkstra.c",
+  "file": "/Users/eliebensoussan/Linux_Project/Dijkstra.c",
+  "output": "CMakeFiles/sim.dir/Dijkstra.c.o"
+},
+{
+  "directory": "/Users/eliebensoussan/Linux_Project/build",
+  "command": "/usr/bin/cc -DSOURCE_DIR=\\\"/Users/eliebensoussan/Linux_Project\\\" -isystem /opt/homebrew/include -std=gnu11 -arch arm64 -Wall -Wextra -O2 -o CMakeFiles/sim.dir/GraphVisual.c.o -c /Users/eliebensoussan/Linux_Project/GraphVisual.c",
+  "file": "/Users/eliebensoussan/Linux_Project/GraphVisual.c",
+  "output": "CMakeFiles/sim.dir/GraphVisual.c.o"
+},
+{
+  "directory": "/Users/eliebensoussan/Linux_Project/build",
+  "command": "/usr/bin/cc -DSOURCE_DIR=\\\"/Users/eliebensoussan/Linux_Project\\\" -isystem /opt/homebrew/include -std=gnu11 -arch arm64 -Wall -Wextra -O2 -o CMakeFiles/sim.dir/main.c.o -c /Users/eliebensoussan/Linux_Project/main.c",
+  "file": "/Users/eliebensoussan/Linux_Project/main.c",
+  "output": "CMakeFiles/sim.dir/main.c.o"
+},
+{
+  "directory": "/Users/eliebensoussan/Linux_Project/build",
+  "command": "/usr/bin/cc -DSOURCE_DIR=\\\"/Users/eliebensoussan/Linux_Project\\\" -isystem /opt/homebrew/include -std=gnu11 -arch arm64 -Wall -Wextra -O2 -o CMakeFiles/sim4.dir/Dijkstra.c.o -c /Users/eliebensoussan/Linux_Project/Dijkstra.c",
+  "file": "/Users/eliebensoussan/Linux_Project/Dijkstra.c",
+  "output": "CMakeFiles/sim4.dir/Dijkstra.c.o"
+},
+{
+  "directory": "/Users/eliebensoussan/Linux_Project/build",
+  "command": "/usr/bin/cc -DSOURCE_DIR=\\\"/Users/eliebensoussan/Linux_Project\\\" -isystem /opt/homebrew/include -std=gnu11 -arch arm64 -Wall -Wextra -O2 -o CMakeFiles/sim4.dir/GraphVisual.c.o -c /Users/eliebensoussan/Linux_Project/GraphVisual.c",
+  "file": "/Users/eliebensoussan/Linux_Project/GraphVisual.c",
+  "output": "CMakeFiles/sim4.dir/GraphVisual.c.o"
+},
+{
+  "directory": "/Users/eliebensoussan/Linux_Project/build",
+  "command": "/usr/bin/cc -DSOURCE_DIR=\\\"/Users/eliebensoussan/Linux_Project\\\" -isystem /opt/homebrew/include -std=gnu11 -arch arm64 -Wall -Wextra -O2 -o CMakeFiles/sim4.dir/main.c.o -c /Users/eliebensoussan/Linux_Project/main.c",
+  "file": "/Users/eliebensoussan/Linux_Project/main.c",
+  "output": "CMakeFiles/sim4.dir/main.c.o"
+}
+]

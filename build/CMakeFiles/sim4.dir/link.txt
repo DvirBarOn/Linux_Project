@@ -1,0 +1,1 @@
+/usr/bin/cc  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/sim4.dir/Dijkstra.c.o CMakeFiles/sim4.dir/GraphVisual.c.o CMakeFiles/sim4.dir/main.c.o -o sim4  /opt/homebrew/lib/libraylib.dylib -framework CoreVideo -framework IOKit -framework Cocoa -framework GLUT -framework OpenGL

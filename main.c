@@ -1,6 +1,5 @@
 #include <stdio.h>
 
-/* declaration from GraphVisual.c */
 void runGraphVisualizer(const char *filename);
 
 int main(int argc, char *argv[]) {
@@ -8,8 +7,6 @@ int main(int argc, char *argv[]) {
         printf("Usage: ./sim <file_name>\n");
         return 1;
     }
-
     runGraphVisualizer(argv[1]);
     return 0;
 }
-

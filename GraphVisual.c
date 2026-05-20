@@ -279,7 +279,7 @@ static void childMain(void) {
 }
 
 /* ===== main entry point ===== */
-void runMultiTravelerVisualizer(const char *filename) {
+void runGraphVisualizer(const char *filename) {
     const int W = 900;
     const int H = 700;
 

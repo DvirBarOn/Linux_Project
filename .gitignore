@@ -3,11 +3,19 @@
 .vscode/
 
 # CMake build folders
+build/
 cmake-build-debug/
 cmake-build-release/
 cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
 
-# Executables
+# Executables / objects
+sim
+sim4
+dijkstra
+*.o
 *.exe
 *.out
 

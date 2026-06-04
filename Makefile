@@ -21,7 +21,10 @@ milestone1: dijkstra
 dijkstra: Dijkstra.c Dijkstra_main.c Dijkstra.h
 	$(CC) $(CFLAGS) Dijkstra.c Dijkstra_main.c -o dijkstra
 
-# ---------- milestone 3: single-traveler GUI ----------
+# ---------- milestone 2: GUI ----------
+milestone2: sim
+
+# ---------- milestone 3: GUI ----------
 milestone3: sim
 
 sim: Dijkstra.c GraphVisual.c main.c Dijkstra.h
@@ -33,8 +36,11 @@ milestone4: sim4
 sim4: Dijkstra.c GraphVisual.c main.c Dijkstra.h
 	$(CC) $(CFLAGS) Dijkstra.c GraphVisual.c main.c -o sim4 $(RAYLIB)
 
+# ---------- milestone 5: IPC-based version ----------
+milestone5: sim
+
 # ---------- housekeeping ----------
 clean:
 	rm -f dijkstra sim sim4 *.o
 
-.PHONY: milestone1 milestone3 milestone4 clean
+.PHONY: milestone1 milestone2 milestone3 milestone4 milestone5 clean

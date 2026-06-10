@@ -10,11 +10,13 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <signal.h>
 #include <errno.h>
 #include <ctype.h>
 #include <fcntl.h>
 #include <time.h>
+#include <semaphore.h>
 
 /* Skip whitespace and '#' comment lines in the open file. */
 static void skipCommentsWS(FILE *fp) {
@@ -53,9 +55,13 @@ static void skipCommentsWS(FILE *fp) {
 #define BUTTON_H       40
 #define BUTTON_GAP     16
 
-/* כמה זמן תימשך יחידת משקל אחת על הקשת */
+/* edge movement timing */
 #define SECONDS_PER_WEIGHT 0.4
 #define MIN_EDGE_DURATION  0.4
+
+/* milestone 6 */
+#define NODE_STAY_SECONDS 1.0
+#define SEM_NAME_LEN      64
 
 typedef struct RawEdge {
     int from;
@@ -77,6 +83,8 @@ typedef struct {
     int nextNode;
     int isDestination;
     int isFinished;
+    int isWaitingForNode;
+    int isInsideNode;
 } TravelerMessage;
 
 typedef struct {
@@ -107,9 +115,48 @@ typedef struct {
     int moving;
     double pausedProgress;
     double edgeDuration;
+
+    int waitingForNode;
+    int insideNode;
+    int waitFromNode;
 } Traveler;
 
 /* ===== helpers ===== */
+
+static void makeNodeSemName(char *buf, size_t size, int node) {
+    snprintf(buf, size, "/node_sem_%d", node);
+}
+
+static sem_t *openNodeSemaphore(int node) {
+    char semName[SEM_NAME_LEN];
+    makeNodeSemName(semName, sizeof(semName), node);
+    return sem_open(semName, O_CREAT, 0644, 1);
+}
+
+static int createAllNodeSemaphores(int numVertices) {
+    for (int i = 0; i < numVertices; i++) {
+        char semName[SEM_NAME_LEN];
+        makeNodeSemName(semName, sizeof(semName), i);
+
+        sem_unlink(semName);
+
+        sem_t *sem = sem_open(semName, O_CREAT | O_EXCL, 0644, 1);
+        if (sem == SEM_FAILED) {
+            perror("sem_open");
+            return 0;
+        }
+        sem_close(sem);
+    }
+    return 1;
+}
+
+static void unlinkAllNodeSemaphores(int numVertices) {
+    for (int i = 0; i < numVertices; i++) {
+        char semName[SEM_NAME_LEN];
+        makeNodeSemName(semName, sizeof(semName), i);
+        sem_unlink(semName);
+    }
+}
 
 static void sleepSeconds(double seconds) {
     if (seconds <= 0.0) return;
@@ -142,6 +189,10 @@ static void resetTravelerState(Traveler *t) {
     t->moving = 0;
     t->pausedProgress = 0.0;
     t->edgeDuration = 1.0;
+
+    t->waitingForNode = 0;
+    t->insideNode = 0;
+    t->waitFromNode = -1;
 }
 
 static void cleanupTravelerProcess(Traveler *t) {
@@ -161,6 +212,14 @@ static void cleanupTravelerProcess(Traveler *t) {
     }
 
     t->pid = 0;
+}
+
+static void reapFinishedTraveler(Traveler *t) {
+    if (t->pid > 0 && t->finished && !t->signaled) {
+        waitpid(t->pid, NULL, 0);
+        t->signaled = 1;
+        t->pid = 0;
+    }
 }
 
 static void getEdgeEndpoints(VisGraph *vg, int from, int to,
@@ -332,14 +391,20 @@ static void drawNode(VisGraph *vg, int i, Font font,
     Color fill = NODE_COLOR;
 
     int isSrc = 0, isDest = 0;
+    int hasInsideTraveler = 0;
+
     for (int t = 0; t < numTravelers; t++) {
         if (travelers[t].src == i)  isSrc = 1;
         if (travelers[t].dest == i) isDest = 1;
+        if (travelers[t].insideNode && travelers[t].currentNode == i) {
+            hasInsideTraveler = 1;
+        }
     }
 
-    if (isSrc && isDest) fill = (Color){180, 80, 200, 255};
-    else if (isSrc)      fill = (Color){40, 180, 100, 255};
-    else if (isDest)     fill = (Color){220, 80, 80, 255};
+    if (hasInsideTraveler)           fill = (Color){255, 170, 40, 255};
+    else if (isSrc && isDest)        fill = (Color){180, 80, 200, 255};
+    else if (isSrc)                  fill = (Color){40, 180, 100, 255};
+    else if (isDest)                 fill = (Color){220, 80, 80, 255};
 
     DrawCircle((int)p.x, (int)p.y, NODE_RADIUS + 5, (Color){fill.r, fill.g, fill.b, 60});
     DrawCircle((int)p.x, (int)p.y, NODE_RADIUS, fill);
@@ -391,20 +456,38 @@ static void processTravelerMessages(Traveler *travelers, int numTravelers, const
             if (n == (ssize_t)sizeof(msg)) {
                 travelers[i].currentNode = msg.currentNode;
                 travelers[i].nextNode = msg.nextNode;
+                travelers[i].waitingForNode = msg.isWaitingForNode;
+                travelers[i].insideNode = msg.isInsideNode;
 
                 if (msg.isFinished) {
                     travelers[i].finished = 1;
                     travelers[i].moving = 0;
                     travelers[i].pausedProgress = 0.0;
-                    printf("[PID=%d] finished\n", (int)msg.pid);
-                } else if (msg.isDestination) {
+                    travelers[i].waitingForNode = 0;
+                    travelers[i].insideNode = 0;
                     travelers[i].arrived = 1;
+
+                    printf("[PID=%d] finished\n", (int)msg.pid);
+                } else if (msg.isWaitingForNode) {
+                    travelers[i].moving = 0;
                     travelers[i].drawFromNode = msg.currentNode;
                     travelers[i].drawToNode = msg.currentNode;
-                    travelers[i].moving = 0;
-                    travelers[i].pausedProgress = 0.0;
-                    printf("[PID=%d] arrived at node %d | DESTINATION\n",
+
+                    printf("[PID=%d] waiting outside node %d\n",
                            (int)msg.pid, msg.currentNode);
+                } else if (msg.isInsideNode) {
+                    travelers[i].moving = 0;
+                    travelers[i].drawFromNode = msg.currentNode;
+                    travelers[i].drawToNode = msg.currentNode;
+                    travelers[i].pausedProgress = 0.0;
+
+                    if (msg.isDestination) {
+                        printf("[PID=%d] entered node %d | DESTINATION\n",
+                               (int)msg.pid, msg.currentNode);
+                    } else {
+                        printf("[PID=%d] entered node %d | next node: %d\n",
+                               (int)msg.pid, msg.currentNode, msg.nextNode);
+                    }
                 } else {
                     int weight = getEdgeWeight(vg, msg.currentNode, msg.nextNode);
                     if (weight <= 0) weight = 1;
@@ -414,12 +497,16 @@ static void processTravelerMessages(Traveler *travelers, int numTravelers, const
                     travelers[i].moveStartTime = GetTime();
                     travelers[i].moving = 1;
                     travelers[i].pausedProgress = 0.0;
+                    travelers[i].waitFromNode = msg.currentNode;
                     travelers[i].edgeDuration = weight * SECONDS_PER_WEIGHT;
                     if (travelers[i].edgeDuration < MIN_EDGE_DURATION) {
                         travelers[i].edgeDuration = MIN_EDGE_DURATION;
                     }
 
-                    printf("[PID=%d] arrived at node %d | next node: %d\n",
+                    travelers[i].waitingForNode = 0;
+                    travelers[i].insideNode = 0;
+
+                    printf("[PID=%d] leaving node %d | moving to node %d\n",
                            (int)msg.pid, msg.currentNode, msg.nextNode);
                 }
 
@@ -463,6 +550,8 @@ static void childMain(const char *filename, int travelerIndex,
         msg.nextNode = -1;
         msg.isDestination = 0;
         msg.isFinished = 1;
+        msg.isWaitingForNode = 0;
+        msg.isInsideNode = 0;
         write(writeFd, &msg, sizeof(msg));
 
         freeDijkstraResult(&result);
@@ -472,23 +561,69 @@ static void childMain(const char *filename, int travelerIndex,
     }
 
     for (int i = 0; i < result.pathLength; i++) {
-        msg.pid = getpid();
-        msg.travelerIndex = travelerIndex;
-        msg.currentNode = result.path[i];
+        int current = result.path[i];
+        int next = (i < result.pathLength - 1) ? result.path[i + 1] : -1;
+        int isDest = (i == result.pathLength - 1);
 
-        if (i == result.pathLength - 1) {
-            msg.nextNode = -1;
-            msg.isDestination = 1;
-        } else {
-            msg.nextNode = result.path[i + 1];
-            msg.isDestination = 0;
+        sem_t *nodeSem = openNodeSemaphore(current);
+        if (nodeSem == SEM_FAILED) {
+            perror("sem_open");
+            freeDijkstraResult(&result);
+            freeGraph(g);
+            close(writeFd);
+            exit(1);
         }
 
+        if (sem_trywait(nodeSem) == -1) {
+            if (errno == EAGAIN) {
+                msg.pid = getpid();
+                msg.travelerIndex = travelerIndex;
+                msg.currentNode = current;
+                msg.nextNode = next;
+                msg.isDestination = isDest;
+                msg.isFinished = 0;
+                msg.isWaitingForNode = 1;
+                msg.isInsideNode = 0;
+                write(writeFd, &msg, sizeof(msg));
+
+                sem_wait(nodeSem);
+            } else {
+                perror("sem_trywait");
+                sem_close(nodeSem);
+                freeDijkstraResult(&result);
+                freeGraph(g);
+                close(writeFd);
+                exit(1);
+            }
+        }
+
+        msg.pid = getpid();
+        msg.travelerIndex = travelerIndex;
+        msg.currentNode = current;
+        msg.nextNode = next;
+        msg.isDestination = isDest;
         msg.isFinished = 0;
+        msg.isWaitingForNode = 0;
+        msg.isInsideNode = 1;
         write(writeFd, &msg, sizeof(msg));
 
-        if (i < result.pathLength - 1) {
-            int weight = getPathEdgeWeight(g, result.path[i], result.path[i + 1]);
+        sleepSeconds(NODE_STAY_SECONDS);
+
+        sem_post(nodeSem);
+        sem_close(nodeSem);
+
+        if (!isDest) {
+            msg.pid = getpid();
+            msg.travelerIndex = travelerIndex;
+            msg.currentNode = current;
+            msg.nextNode = next;
+            msg.isDestination = 0;
+            msg.isFinished = 0;
+            msg.isWaitingForNode = 0;
+            msg.isInsideNode = 0;
+            write(writeFd, &msg, sizeof(msg));
+
+            int weight = getPathEdgeWeight(g, current, next);
             double duration = weight * SECONDS_PER_WEIGHT;
             if (duration < MIN_EDGE_DURATION) duration = MIN_EDGE_DURATION;
             sleepSeconds(duration);
@@ -499,8 +634,10 @@ static void childMain(const char *filename, int travelerIndex,
     msg.travelerIndex = travelerIndex;
     msg.currentNode = dest;
     msg.nextNode = -1;
-    msg.isDestination = 0;
+    msg.isDestination = 1;
     msg.isFinished = 1;
+    msg.isWaitingForNode = 0;
+    msg.isInsideNode = 0;
     write(writeFd, &msg, sizeof(msg));
 
     freeDijkstraResult(&result);
@@ -621,7 +758,17 @@ void runGraphVisualizer(const char *filename) {
                                        travelers[i].dest);
     }
 
+    if (!createAllNodeSemaphores(algoGraph->numVertices)) {
+        for (int i = 0; i < numTravelers; i++) {
+            freeDijkstraResult(&travelers[i].result);
+        }
+        free(travelers);
+        freeGraph(algoGraph);
+        return;
+    }
+
     if (!spawnTravelers(travelers, numTravelers, filename)) {
+        unlinkAllNodeSemaphores(algoGraph->numVertices);
         for (int i = 0; i < numTravelers; i++) {
             freeDijkstraResult(&travelers[i].result);
         }
@@ -636,12 +783,13 @@ void runGraphVisualizer(const char *filename) {
             cleanupTravelerProcess(&travelers[i]);
             freeDijkstraResult(&travelers[i].result);
         }
+        unlinkAllNodeSemaphores(algoGraph->numVertices);
         free(travelers);
         freeGraph(algoGraph);
         return;
     }
 
-    InitWindow(W, H, "Graph Visualizer - Milestone 5");
+    InitWindow(W, H, "Graph Visualizer - Milestone 6");
     SetTargetFPS(60);
     computeLayout(&vg, W, H);
     Font font = GetFontDefault();
@@ -650,12 +798,7 @@ void runGraphVisualizer(const char *filename) {
         processTravelerMessages(travelers, numTravelers, &vg);
 
         for (int i = 0; i < numTravelers; i++) {
-            Traveler *t = &travelers[i];
-            if (t->arrived && !t->signaled && t->pid > 0) {
-                kill(t->pid, SIGTERM);
-                waitpid(t->pid, NULL, 0);
-                t->signaled = 1;
-            }
+            reapFinishedTraveler(&travelers[i]);
         }
 
         BeginDrawing();
@@ -670,7 +813,7 @@ void runGraphVisualizer(const char *filename) {
         DrawRectangle(0, 0, W, TOP_BAR_HEIGHT, (Color){20, 24, 36, 255});
         DrawLine(0, TOP_BAR_HEIGHT, W, TOP_BAR_HEIGHT, (Color){60, 70, 100, 180});
 
-        const char *title = "Graph Visualizer - Milestone 5";
+        const char *title = "Graph Visualizer - Milestone 6";
         Vector2 ts = MeasureTextEx(font, title, 26, 1);
         DrawTextEx(font,
                    title,
@@ -747,6 +890,10 @@ void runGraphVisualizer(const char *filename) {
                     cleanupTravelerProcess(&travelers[i]);
                     resetTravelerState(&travelers[i]);
                 }
+
+                unlinkAllNodeSemaphores(algoGraph->numVertices);
+                createAllNodeSemaphores(algoGraph->numVertices);
+
                 spawnTravelers(travelers, numTravelers, filename);
                 isPaused = 0;
             }
@@ -799,7 +946,31 @@ void runGraphVisualizer(const char *filename) {
             Vector2 entityPos;
             Vector2 basePos;
 
-            if (t->moving && t->drawToNode >= 0 && t->drawToNode < vg.numVertices) {
+            if (t->waitingForNode && t->waitFromNode >= 0 &&
+                t->currentNode >= 0 && t->currentNode < vg.numVertices &&
+                t->waitFromNode < vg.numVertices) {
+
+                Vector2 start, end;
+                getEdgeEndpoints(&vg, t->waitFromNode, t->currentNode, &start, &end);
+
+                float dx = end.x - start.x;
+                float dy = end.y - start.y;
+                float len = sqrtf(dx * dx + dy * dy);
+
+                if (len > 0.001f) {
+                    float ux = dx / len;
+                    float uy = dy / len;
+                    float waitDistance = 22.0f;
+
+                    entityPos.x = end.x - ux * waitDistance;
+                    entityPos.y = end.y - uy * waitDistance;
+                } else {
+                    entityPos = vg.pos[t->currentNode];
+                }
+
+                basePos = entityPos;
+            }
+            else if (t->moving && t->drawToNode >= 0 && t->drawToNode < vg.numVertices) {
                 Vector2 start, end;
                 getEdgeEndpoints(&vg, t->drawFromNode, t->drawToNode, &start, &end);
 
@@ -817,14 +988,19 @@ void runGraphVisualizer(const char *filename) {
                 basePos = entityPos;
             } else {
                 basePos = vg.pos[t->drawFromNode];
+                entityPos = basePos;
             }
 
-            /* traveler exactly on the edge / node */
-            entityPos = basePos;
+            Color travelerDrawColor = t->color;
+            if (t->waitingForNode) {
+                travelerDrawColor = ORANGE;
+            } else if (t->insideNode) {
+                travelerDrawColor = GREEN;
+            }
 
             DrawCircle((int)entityPos.x, (int)entityPos.y, 16,
-                       (Color){t->color.r, t->color.g, t->color.b, 100});
-            DrawCircle((int)entityPos.x, (int)entityPos.y, 11, t->color);
+                       (Color){travelerDrawColor.r, travelerDrawColor.g, travelerDrawColor.b, 100});
+            DrawCircle((int)entityPos.x, (int)entityPos.y, 11, travelerDrawColor);
             DrawCircleLines((int)entityPos.x, (int)entityPos.y, 11, WHITE);
 
             char lab[16];
@@ -843,18 +1019,29 @@ void runGraphVisualizer(const char *filename) {
             Traveler *t = &travelers[i];
             int yy = panelY + 24 + i * 22;
 
-            DrawCircle(panelX + 8, yy + 8, 7, t->color);
+            Color panelColor = t->color;
+            if (t->waitingForNode) panelColor = ORANGE;
+            else if (t->insideNode) panelColor = GREEN;
 
-            char line[120];
+            DrawCircle(panelX + 8, yy + 8, 7, panelColor);
+
+            const char *status;
+            if (t->finished) status = "[finished]";
+            else if (isPaused && t->started && !t->finished) status = "[paused]";
+            else if (t->waitingForNode) status = "[waiting node]";
+            else if (t->insideNode) status = "[inside node]";
+            else if (t->moving) status = "[moving]";
+            else if (t->started) status = "[running]";
+            else status = "[waiting]";
+
+            char line[140];
             snprintf(line, sizeof(line), "T%d  %d -> %d  at:%d  next:%d %s",
                      i + 1,
                      t->src,
                      t->dest,
                      t->currentNode,
                      t->nextNode,
-                     t->finished ? "[finished]" :
-                     (isPaused && t->started && !t->finished ? "[paused]" :
-                     (t->started ? "[running]" : "[waiting]")));
+                     status);
 
             DrawTextEx(font, line, (Vector2){panelX + 22, yy}, 14, 1, WHITE);
         }
@@ -883,6 +1070,7 @@ void runGraphVisualizer(const char *filename) {
         freeDijkstraResult(&travelers[i].result);
     }
 
+    unlinkAllNodeSemaphores(algoGraph->numVertices);
     free(travelers);
     freeGraph(algoGraph);
 }

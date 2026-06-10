@@ -68,10 +68,10 @@ CMake produces the following binaries in `build/`:
 | Binary     | Description                                          |
 | ---------- | ---------------------------------------------------- |
 | `dijkstra` | Milestone 1 — terminal Dijkstra                      |
-| `sim`      | Milestone 5 — IPC-based multi-traveler visualization |
+| `sim`      | Milestone 6 — synchronized multi-traveler visualization |
 | `sim4`     | Milestone 4 — multi-traveler with `fork()`           |
 
-> Note: in the current project layout, milestone 5 runs through `sim`.
+> Note: in the current project layout, milestones 5 and 6 run through `sim`.
 
 ---
 
@@ -102,7 +102,7 @@ N M               # N vertices, M edges
 u v w             # M lines: edge from u to v with weight w
 ...
 
-# travelers (milestones 4 and 5)
+# travelers (milestones 4, 5 and 6)
 T                 # number of travelers
 src dest          # T lines: source / destination for each traveler
 src dest
@@ -139,6 +139,35 @@ Lines beginning with `#` are treated as comments and ignored.
 
 ---
 
+
+
+### Milestone 6 — Synchronized node access
+- Added synchronization so that only **one traveler can stay inside a node at any given time**
+- Each node is treated as a shared resource protected by a **POSIX semaphore**
+- If a traveler reaches an occupied node, it waits **outside the node** until the node becomes available
+- After entering a node, the traveler stays inside it for **1 full second**
+- Once the traveler leaves the node, it releases the semaphore so another traveler may enter
+- The GUI now distinguishes between travelers that are **waiting outside a node**, **inside a node**, **moving on an edge**, and **finished**
+
+---
+
+## Synchronization choice
+
+For milestone 6 we chose **POSIX semaphores**, with **one semaphore per node**.
+
+### Why semaphores?
+- Each node behaves like a shared resource with capacity 1
+- A semaphore models this naturally: a traveler must acquire the node before entering it
+- If the node is already occupied, the traveler blocks and waits outside
+- This mechanism works well with a multi-process design based on `fork()`
+
+In the implementation:
+- `sem_wait` / `sem_trywait` are used before entering a node
+- The traveler remains inside the node for one second
+- `sem_post` is called when leaving the node
+- This guarantees that no two travelers are inside the same node at the same time
+
+---
 ## Process model (milestone 5)
 
 Milestone 5 uses a parent-child architecture.
@@ -179,7 +208,7 @@ reads these messages in non-blocking mode and updates the GUI accordingly.
 
 ---
 
-## GUI controls (milestone 5)
+## GUI controls (milestones 5 and 6)
 
 The GUI includes:
 
@@ -245,5 +274,6 @@ Linux_Project/
 ## Notes
 
 - Milestone 5 extends milestone 4 by moving shortest-path responsibility into the child processes themselves
+- Milestone 6 extends milestone 5 by adding synchronized access to nodes using semaphores
 - The parent reacts to IPC messages sent by the children and updates the GUI accordingly
 - The simulation is designed for POSIX-compatible systems only

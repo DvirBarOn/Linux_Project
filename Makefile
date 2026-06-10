@@ -34,7 +34,7 @@ sim: Dijkstra.c GraphVisual.c main.c Dijkstra.h
 milestone4: sim4
 
 sim4: Dijkstra.c GraphVisual.c main.c Dijkstra.h
-	$(CC) $(CFLAGS) Dijkstra.c GraphVisual.c main.c -o sim4 $(RAYLIB)
+	;;;;$(CC) $(CFLAGS) Dijkstra.c GraphVisual.c main.c -o sim4 $(RAYLIB)
 
 # ---------- milestone 5: IPC-based version ----------
 milestone5: sim

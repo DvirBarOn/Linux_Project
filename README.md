@@ -1,7 +1,8 @@
 # Operating Systems Project – Graph Simulation
 
 A directed weighted graph simulator with Dijkstra shortest paths, raylib
-visualization, and a multi-traveler process model using `fork()` and IPC.
+visualization, and a multi-traveler process model using fork(), IPC, node
+synchronization, and scheduling policies.
 
 ## Participants
 
@@ -19,7 +20,7 @@ git clone https://github.com/DvirBarOn/Linux_Project.git
 cd Linux_Project
 cmake -B build
 cmake --build build
-./build/sim
+./build/sim -schd fcfs
 ```
 
 The first build may take 1–2 minutes because raylib is downloaded and compiled
@@ -65,13 +66,13 @@ On macOS, Xcode Command Line Tools are enough.
 
 CMake produces the following binaries in `build/`:
 
-| Binary     | Description                                          |
-| ---------- | ---------------------------------------------------- |
-| `dijkstra` | Milestone 1 — terminal Dijkstra                      |
-| `sim`      | Milestone 6 — synchronized multi-traveler visualization |
-| `sim4`     | Milestone 4 — multi-traveler with `fork()`           |
+| Binary     | Description                                               |
+| ---------- |-----------------------------------------------------------|
+| `dijkstra` | Milestone 1 — terminal Dijkstra                           |
+| `sim`      | Milestone 5-7 — GUI simulation with IPC and scheduling |
+| `sim4`     | Milestone 4 — multi-traveler with `fork()`                |
 
-> Note: in the current project layout, milestones 5 and 6 run through `sim`.
+> Note: in the current project layout, milestones 2, 3, 5, 6, and 7 run through sim.
 
 ---
 
@@ -91,7 +92,14 @@ Examples:
 ./build/sim mygraph.txt
 cd build && ./sim
 ```
+## Milestone 7 usage
 
+Run the simulator with a scheduling policy:
+./sim -schd fcfs Graph.txt
+./sim -schd sjf Graph.txt
+
+* FCFS selects the traveler that requested the node first
+* SJF selects the traveler whose next edge has the smallest weight
 ---
 
 ## Input file format
@@ -102,7 +110,7 @@ N M               # N vertices, M edges
 u v w             # M lines: edge from u to v with weight w
 ...
 
-# travelers (milestones 4, 5 and 6)
+# travelers (milestones 4, 5, 6 and 7)
 T                 # number of travelers
 src dest          # T lines: source / destination for each traveler
 src dest
@@ -151,6 +159,20 @@ Lines beginning with `#` are treated as comments and ignored.
 
 ---
 
+### Milestone 7 — Node scheduling policies
+
+* Added node-level scheduling policies for travelers waiting to enter a node
+* The scheduler is selected at runtime using a command-line flag
+* Supported schedulers:
+  * FCFS — First Come First Served
+  * SJF — Shortest Job First
+* In this project, the SJF job length is defined as the weight of the next edge
+* When multiple travelers wait for the same node, the parent process chooses who enters next according to the selected scheduler
+* A short collection window is used so the parent can gather competing requests before making the scheduling decision
+* The active scheduler is displayed in the GUI
+
+---
+
 ## Synchronization choice
 
 For milestone 6 we chose **POSIX semaphores**, with **one semaphore per node**.
@@ -168,12 +190,14 @@ In the implementation:
 - This guarantees that no two travelers are inside the same node at the same time
 
 ---
-## Process model (milestone 5)
+## Process model (milestones 5–7)
 
-Milestone 5 uses a parent-child architecture.
+The simulator uses a parent-child architecture.
 
-### Parent process
+Parent process
+
 The parent:
+
 1. Loads the graph and traveler list
 2. Creates one child process per traveler
 3. Creates IPC channels between parent and children
@@ -181,14 +205,18 @@ The parent:
 5. Receives traveler updates from children
 6. Updates the visualization and terminal output
 7. Handles Play / Pause / Reset interactions
+8. Applies synchronization and scheduling logic when travelers compete for nodes
 
-### Child processes
+Child processes
+
 Each child:
+
 1. Waits for the start signal from the parent
 2. Loads the graph independently
 3. Runs Dijkstra independently for its own source and destination
-4. Sends a message to the parent whenever it reaches a node
-5. Sends a final message when it finishes
+4. Sends status messages to the parent
+5. Waits for parent approval before entering a node when required
+6. Sends a final message when it finishes
 
 ---
 
@@ -208,27 +236,50 @@ reads these messages in non-blocking mode and updates the GUI accordingly.
 
 ---
 
-## GUI controls (milestones 5 and 6)
+## Synchronization and scheduling
 
-The GUI includes:
+Synchronization
 
-- **Play** — starts the travelers and later acts as Pause / Resume
-- **Reset** — resets the simulation, recreates the child processes, and returns all travelers to their starting nodes
+Milestone 6 introduced synchronized access to nodes so that only one traveler
+can stay inside a node at a time.
 
-Traveler movement speed depends on the **weight of the edge** currently being crossed.
+Scheduling
+
+Milestone 7 extends this behavior by deciding which waiting traveler enters next
+when several travelers compete for the same node.
+
+Two scheduling policies are supported:
+
+* FCFS — selects the traveler that requested the node first
+* SJF — selects the traveler whose next edge has the smallest weight
+
+To reduce timing bias caused by process creation and message arrival order, the
+parent uses a short collection window before dispatching the next traveler
+into a free node.
 
 ---
 
-## Example milestone 5 terminal output
+## GUI controls (milestones 5–7)
+
+The GUI includes:
+
+* Play — starts the travelers and later acts as Pause / Resume
+* Reset — resets the simulation, recreates the child processes, and returns all travelers to their starting nodes
+
+Traveler movement speed depends on the weight of the edge currently being crossed.
+
+The GUI also displays the active scheduling policy in milestone 7.
+
+---
+
+## Example milestone 7 terminal output
 
 ```text
-[PID=2314] arrived at node 0 | next node: 2
-[PID=2315] arrived at node 1 | next node: 4
-[PID=2314] arrived at node 2 | next node: 5
-[PID=2315] arrived at node 4 | DESTINATION
-[PID=2315] finished
-[PID=2314] arrived at node 5 | DESTINATION
-[PID=2314] finished
+[PID=9001] request node 3 | next node: 4 | edge weight: 9
+[PID=9002] request node 3 | next node: 5 | edge weight: 2
+[PID=9002] entered node 3 | next node: 5
+[PID=9002] leaving node 3 | moving to node 5
+[PID=9001] entered node 3 | next node: 4
 ```
 
 ---
@@ -247,6 +298,8 @@ make milestone2   # builds ./sim
 make milestone3   # builds ./sim
 make milestone4   # builds ./sim4
 make milestone5   # builds ./sim
+make milestone6   # builds ./sim
+make milestone7   # builds ./sim
 ```
 
 The CMake build is the recommended option because it handles raylib
@@ -263,7 +316,7 @@ Linux_Project/
 ├── Dijkstra.h        # shared types and function declarations
 ├── Dijkstra.c        # graph, Dijkstra, loaders, helpers
 ├── Dijkstra_main.c   # milestone 1 entry point
-├── GraphVisual.c     # GUI + processes + IPC + animation
+├── GraphVisual.c     # GUI + processes + IPC + scheduling
 ├── main.c            # simulator entry point
 ├── Graph.txt         # example input
 └── README.md
@@ -273,7 +326,8 @@ Linux_Project/
 
 ## Notes
 
-- Milestone 5 extends milestone 4 by moving shortest-path responsibility into the child processes themselves
-- Milestone 6 extends milestone 5 by adding synchronized access to nodes using semaphores
-- The parent reacts to IPC messages sent by the children and updates the GUI accordingly
-- The simulation is designed for POSIX-compatible systems only
+* Milestone 5 extends milestone 4 by moving shortest-path responsibility into the child processes themselves
+* Milestone 6 extends milestone 5 by adding synchronized access to nodes
+* Milestone 7 extends milestone 6 by adding FCFS and SJF scheduling for travelers waiting to enter a node
+* The parent reacts to IPC messages sent by the children and updates the GUI accordingly
+* The simulation is designed for POSIX-compatible systems only

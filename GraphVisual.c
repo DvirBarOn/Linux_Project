@@ -10,13 +10,11 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <sys/stat.h>
 #include <signal.h>
 #include <errno.h>
 #include <ctype.h>
 #include <fcntl.h>
 #include <time.h>
-#include <semaphore.h>
 
 /* Skip whitespace and '#' comment lines in the open file. */
 static void skipCommentsWS(FILE *fp) {
@@ -56,12 +54,17 @@ static void skipCommentsWS(FILE *fp) {
 #define BUTTON_GAP     16
 
 /* edge movement timing */
-#define SECONDS_PER_WEIGHT 0.4
-#define MIN_EDGE_DURATION  0.4
+#define SECONDS_PER_WEIGHT    0.4
+#define MIN_EDGE_DURATION     0.4
 
-/* milestone 6 */
-#define NODE_STAY_SECONDS 1.0
-#define SEM_NAME_LEN      64
+/* milestone 6/7 */
+#define NODE_STAY_SECONDS       1.0
+#define COLLECTION_WINDOW_SECONDS 0.20
+
+typedef enum {
+    SCHED_FCFS,
+    SCHED_SJF
+} SchedulerType;
 
 typedef struct RawEdge {
     int from;
@@ -76,16 +79,40 @@ typedef struct {
     Vector2 pos[MAX_VERTICES];
 } VisGraph;
 
+typedef enum {
+    MSG_REQUEST_NODE,
+    MSG_ENTERED_NODE,
+    MSG_LEAVING_NODE,
+    MSG_FINISHED
+} MessageType;
+
 typedef struct {
+    MessageType type;
     pid_t pid;
     int travelerIndex;
     int currentNode;
     int nextNode;
+    int nextEdgeWeight;
     int isDestination;
-    int isFinished;
-    int isWaitingForNode;
-    int isInsideNode;
 } TravelerMessage;
+
+typedef struct {
+    int travelerIndex;
+    pid_t pid;
+    int currentNode;
+    int nextNode;
+    int nextEdgeWeight;
+    long long arrivalOrder;
+} WaitingTraveler;
+
+typedef struct {
+    int occupiedBy;                  /* -1 if free */
+    WaitingTraveler queue[MAX_TRAVELERS];
+    int queueSize;
+
+    int collecting;
+    double collectionStartTime;
+} NodeQueue;
 
 typedef struct {
     int src;
@@ -94,16 +121,12 @@ typedef struct {
     pid_t pid;
     Color color;
 
-    int currentSegment;
-    int currentStep;
-    int totalSteps;
-    float stepTimer;
-    int isWaitingAtNode;
-    float waitTimer;
     int arrived;
     int signaled;
 
-    int pipeFd[2];
+    int pipeFd[2];        /* child -> parent */
+    int controlPipe[2];   /* parent -> child */
+
     int currentNode;
     int nextNode;
     int finished;
@@ -123,38 +146,151 @@ typedef struct {
 
 /* ===== helpers ===== */
 
-static void makeNodeSemName(char *buf, size_t size, int node) {
-    snprintf(buf, size, "/node_sem_%d", node);
+static const char *schedulerName(SchedulerType scheduler) {
+    return (scheduler == SCHED_SJF) ? "SJF" : "FCFS";
 }
 
-static sem_t *openNodeSemaphore(int node) {
-    char semName[SEM_NAME_LEN];
-    makeNodeSemName(semName, sizeof(semName), node);
-    return sem_open(semName, O_CREAT, 0644, 1);
-}
-
-static int createAllNodeSemaphores(int numVertices) {
+static void initNodeQueues(NodeQueue *nodeQueues, int numVertices) {
     for (int i = 0; i < numVertices; i++) {
-        char semName[SEM_NAME_LEN];
-        makeNodeSemName(semName, sizeof(semName), i);
-
-        sem_unlink(semName);
-
-        sem_t *sem = sem_open(semName, O_CREAT | O_EXCL, 0644, 1);
-        if (sem == SEM_FAILED) {
-            perror("sem_open");
-            return 0;
-        }
-        sem_close(sem);
+        nodeQueues[i].occupiedBy = -1;
+        nodeQueues[i].queueSize = 0;
+        nodeQueues[i].collecting = 0;
+        nodeQueues[i].collectionStartTime = 0.0;
     }
-    return 1;
 }
 
-static void unlinkAllNodeSemaphores(int numVertices) {
-    for (int i = 0; i < numVertices; i++) {
-        char semName[SEM_NAME_LEN];
-        makeNodeSemName(semName, sizeof(semName), i);
-        sem_unlink(semName);
+static void enqueueTraveler(NodeQueue *nodeQueues, const WaitingTraveler *wt) {
+    int node = wt->currentNode;
+
+    if (node < 0 || node >= MAX_VERTICES) return;
+    if (nodeQueues[node].queueSize >= MAX_TRAVELERS) return;
+
+    nodeQueues[node].queue[nodeQueues[node].queueSize] = *wt;
+    nodeQueues[node].queueSize++;
+}
+
+static int pickNextTravelerIndex(const NodeQueue *nodeQueues, int node, SchedulerType scheduler) {
+    if (node < 0 || node >= MAX_VERTICES) return -1;
+    if (nodeQueues[node].queueSize <= 0) return -1;
+
+    int best = 0;
+
+    for (int i = 1; i < nodeQueues[node].queueSize; i++) {
+        const WaitingTraveler *cand = &nodeQueues[node].queue[i];
+        const WaitingTraveler *cur  = &nodeQueues[node].queue[best];
+
+        if (scheduler == SCHED_FCFS) {
+            if (cand->arrivalOrder < cur->arrivalOrder) {
+                best = i;
+            }
+        } else {
+            if (cand->nextEdgeWeight < cur->nextEdgeWeight) {
+                best = i;
+            } else if (cand->nextEdgeWeight == cur->nextEdgeWeight &&
+                       cand->arrivalOrder < cur->arrivalOrder) {
+                best = i;
+            }
+        }
+    }
+
+    return best;
+}
+
+static WaitingTraveler removeWaitingTraveler(NodeQueue *nodeQueues, int node, int idx) {
+    WaitingTraveler removed = {0};
+
+    if (node < 0 || node >= MAX_VERTICES) return removed;
+    if (idx < 0 || idx >= nodeQueues[node].queueSize) return removed;
+
+    removed = nodeQueues[node].queue[idx];
+
+    for (int i = idx; i < nodeQueues[node].queueSize - 1; i++) {
+        nodeQueues[node].queue[i] = nodeQueues[node].queue[i + 1];
+    }
+
+    nodeQueues[node].queueSize--;
+    return removed;
+}
+
+static int sendTravelerMessage(int fd, const TravelerMessage *msg) {
+    ssize_t n = write(fd, msg, sizeof(*msg));
+    return (n == (ssize_t)sizeof(*msg));
+}
+
+static int sendEnterApproval(int fd, int node) {
+    ssize_t n = write(fd, &node, sizeof(node));
+    return (n == (ssize_t)sizeof(node));
+}
+
+static int waitForEnterApproval(int fd, int expectedNode) {
+    int approvedNode = -1;
+    ssize_t n = read(fd, &approvedNode, sizeof(approvedNode));
+    if (n != (ssize_t)sizeof(approvedNode)) {
+        return 0;
+    }
+    return (approvedNode == expectedNode);
+}
+
+static void startCollectionWindow(NodeQueue *nodeQueues, int node, double now) {
+    if (node < 0 || node >= MAX_VERTICES) return;
+    if (nodeQueues[node].occupiedBy != -1) return;
+    if (nodeQueues[node].queueSize <= 0) return;
+    if (nodeQueues[node].collecting) return;
+
+    nodeQueues[node].collecting = 1;
+    nodeQueues[node].collectionStartTime = now;
+}
+
+static void tryDispatchNextTraveler(NodeQueue *nodeQueues,
+                                    Traveler *travelers,
+                                    int numTravelers,
+                                    int node,
+                                    SchedulerType scheduler) {
+    if (node < 0 || node >= MAX_VERTICES) return;
+    if (nodeQueues[node].occupiedBy != -1) return;
+    if (nodeQueues[node].queueSize <= 0) return;
+
+    int idx = pickNextTravelerIndex(nodeQueues, node, scheduler);
+    if (idx < 0) return;
+
+    WaitingTraveler wt = removeWaitingTraveler(nodeQueues, node, idx);
+
+    if (wt.travelerIndex < 0 || wt.travelerIndex >= numTravelers) return;
+
+    nodeQueues[node].occupiedBy = wt.travelerIndex;
+    nodeQueues[node].collecting = 0;
+    nodeQueues[node].collectionStartTime = 0.0;
+
+    Traveler *t = &travelers[wt.travelerIndex];
+    if (t->controlPipe[1] >= 0) {
+        sendEnterApproval(t->controlPipe[1], node);
+    }
+}
+
+static void dispatchReadyNodes(NodeQueue *nodeQueues,
+                               int numVertices,
+                               Traveler *travelers,
+                               int numTravelers,
+                               SchedulerType scheduler,
+                               double now) {
+    for (int node = 0; node < numVertices; node++) {
+        if (nodeQueues[node].occupiedBy != -1) {
+            continue;
+        }
+
+        if (!nodeQueues[node].collecting) {
+            continue;
+        }
+
+        if (nodeQueues[node].queueSize <= 0) {
+            nodeQueues[node].collecting = 0;
+            nodeQueues[node].collectionStartTime = 0.0;
+            continue;
+        }
+
+        if ((now - nodeQueues[node].collectionStartTime) >= COLLECTION_WINDOW_SECONDS) {
+            tryDispatchNextTraveler(nodeQueues, travelers, numTravelers, node, scheduler);
+        }
     }
 }
 
@@ -174,6 +310,8 @@ static void sleepSeconds(double seconds) {
 static void resetTravelerState(Traveler *t) {
     t->pipeFd[0] = -1;
     t->pipeFd[1] = -1;
+    t->controlPipe[0] = -1;
+    t->controlPipe[1] = -1;
     t->pid = 0;
 
     t->currentNode = t->src;
@@ -209,6 +347,14 @@ static void cleanupTravelerProcess(Traveler *t) {
     if (t->pipeFd[1] >= 0) {
         close(t->pipeFd[1]);
         t->pipeFd[1] = -1;
+    }
+    if (t->controlPipe[0] >= 0) {
+        close(t->controlPipe[0]);
+        t->controlPipe[0] = -1;
+    }
+    if (t->controlPipe[1] >= 0) {
+        close(t->controlPipe[1]);
+        t->controlPipe[1] = -1;
     }
 
     t->pid = 0;
@@ -442,7 +588,15 @@ static Color travelerColor(int idx) {
     return palette[idx % n];
 }
 
-static void processTravelerMessages(Traveler *travelers, int numTravelers, const VisGraph *vg) {
+static void processTravelerMessages(Traveler *travelers,
+                                    int numTravelers,
+                                    const VisGraph *vg,
+                                    NodeQueue *nodeQueues,
+                                    SchedulerType scheduler,
+                                    long long *arrivalCounter,
+                                    double now) {
+    (void)scheduler;
+
     for (int i = 0; i < numTravelers; i++) {
         TravelerMessage msg;
 
@@ -453,67 +607,110 @@ static void processTravelerMessages(Traveler *travelers, int numTravelers, const
         while (1) {
             ssize_t n = read(travelers[i].pipeFd[0], &msg, sizeof(msg));
 
-            if (n == (ssize_t)sizeof(msg)) {
-                travelers[i].currentNode = msg.currentNode;
-                travelers[i].nextNode = msg.nextNode;
-                travelers[i].waitingForNode = msg.isWaitingForNode;
-                travelers[i].insideNode = msg.isInsideNode;
-
-                if (msg.isFinished) {
-                    travelers[i].finished = 1;
-                    travelers[i].moving = 0;
-                    travelers[i].pausedProgress = 0.0;
-                    travelers[i].waitingForNode = 0;
-                    travelers[i].insideNode = 0;
-                    travelers[i].arrived = 1;
-
-                    printf("[PID=%d] finished\n", (int)msg.pid);
-                } else if (msg.isWaitingForNode) {
-                    travelers[i].moving = 0;
-                    travelers[i].drawFromNode = msg.currentNode;
-                    travelers[i].drawToNode = msg.currentNode;
-
-                    printf("[PID=%d] waiting outside node %d\n",
-                           (int)msg.pid, msg.currentNode);
-                } else if (msg.isInsideNode) {
-                    travelers[i].moving = 0;
-                    travelers[i].drawFromNode = msg.currentNode;
-                    travelers[i].drawToNode = msg.currentNode;
-                    travelers[i].pausedProgress = 0.0;
-
-                    if (msg.isDestination) {
-                        printf("[PID=%d] entered node %d | DESTINATION\n",
-                               (int)msg.pid, msg.currentNode);
-                    } else {
-                        printf("[PID=%d] entered node %d | next node: %d\n",
-                               (int)msg.pid, msg.currentNode, msg.nextNode);
-                    }
-                } else {
-                    int weight = getEdgeWeight(vg, msg.currentNode, msg.nextNode);
-                    if (weight <= 0) weight = 1;
-
-                    travelers[i].drawFromNode = msg.currentNode;
-                    travelers[i].drawToNode = msg.nextNode;
-                    travelers[i].moveStartTime = GetTime();
-                    travelers[i].moving = 1;
-                    travelers[i].pausedProgress = 0.0;
-                    travelers[i].waitFromNode = msg.currentNode;
-                    travelers[i].edgeDuration = weight * SECONDS_PER_WEIGHT;
-                    if (travelers[i].edgeDuration < MIN_EDGE_DURATION) {
-                        travelers[i].edgeDuration = MIN_EDGE_DURATION;
-                    }
-
-                    travelers[i].waitingForNode = 0;
-                    travelers[i].insideNode = 0;
-
-                    printf("[PID=%d] leaving node %d | moving to node %d\n",
-                           (int)msg.pid, msg.currentNode, msg.nextNode);
-                }
-
-                fflush(stdout);
-            } else {
+            if (n != (ssize_t)sizeof(msg)) {
                 break;
             }
+
+            if (msg.travelerIndex < 0 || msg.travelerIndex >= numTravelers) {
+                continue;
+            }
+
+            Traveler *t = &travelers[msg.travelerIndex];
+            t->currentNode = msg.currentNode;
+            t->nextNode = msg.nextNode;
+
+            if (msg.type == MSG_REQUEST_NODE) {
+                t->waitingForNode = 1;
+                t->insideNode = 0;
+                t->moving = 0;
+                t->drawFromNode = msg.currentNode;
+                t->drawToNode = msg.currentNode;
+
+                printf("[PID=%d] request node %d | next node: %d | edge weight: %d\n",
+                       (int)msg.pid, msg.currentNode, msg.nextNode, msg.nextEdgeWeight);
+
+                if (msg.currentNode >= 0 && msg.currentNode < MAX_VERTICES) {
+                    WaitingTraveler wt;
+                    wt.travelerIndex = msg.travelerIndex;
+                    wt.pid = msg.pid;
+                    wt.currentNode = msg.currentNode;
+                    wt.nextNode = msg.nextNode;
+                    wt.nextEdgeWeight = msg.nextEdgeWeight;
+                    wt.arrivalOrder = (*arrivalCounter)++;
+
+                    enqueueTraveler(nodeQueues, &wt);
+
+                    if (nodeQueues[msg.currentNode].occupiedBy == -1) {
+                        startCollectionWindow(nodeQueues, msg.currentNode, now);
+                    }
+                }
+            }
+            else if (msg.type == MSG_ENTERED_NODE) {
+                t->waitingForNode = 0;
+                t->insideNode = 1;
+                t->moving = 0;
+                t->drawFromNode = msg.currentNode;
+                t->drawToNode = msg.currentNode;
+                t->pausedProgress = 0.0;
+
+                if (msg.isDestination) {
+                    printf("[PID=%d] entered node %d | DESTINATION\n",
+                           (int)msg.pid, msg.currentNode);
+                } else {
+                    printf("[PID=%d] entered node %d | next node: %d\n",
+                           (int)msg.pid, msg.currentNode, msg.nextNode);
+                }
+            }
+            else if (msg.type == MSG_LEAVING_NODE) {
+                int weight = getEdgeWeight(vg, msg.currentNode, msg.nextNode);
+                if (weight <= 0) weight = 1;
+
+                t->waitingForNode = 0;
+                t->insideNode = 0;
+                t->drawFromNode = msg.currentNode;
+                t->drawToNode = msg.nextNode;
+                t->moveStartTime = GetTime();
+                t->moving = 1;
+                t->pausedProgress = 0.0;
+                t->waitFromNode = msg.currentNode;
+                t->edgeDuration = weight * SECONDS_PER_WEIGHT;
+                if (t->edgeDuration < MIN_EDGE_DURATION) {
+                    t->edgeDuration = MIN_EDGE_DURATION;
+                }
+
+                if (msg.currentNode >= 0 && msg.currentNode < MAX_VERTICES) {
+                    if (nodeQueues[msg.currentNode].occupiedBy == msg.travelerIndex) {
+                        nodeQueues[msg.currentNode].occupiedBy = -1;
+                    }
+                    if (nodeQueues[msg.currentNode].queueSize > 0) {
+                        startCollectionWindow(nodeQueues, msg.currentNode, now);
+                    }
+                }
+
+                printf("[PID=%d] leaving node %d | moving to node %d\n",
+                       (int)msg.pid, msg.currentNode, msg.nextNode);
+            }
+            else if (msg.type == MSG_FINISHED) {
+                t->finished = 1;
+                t->waitingForNode = 0;
+                t->insideNode = 0;
+                t->moving = 0;
+                t->pausedProgress = 0.0;
+                t->arrived = 1;
+
+                if (msg.currentNode >= 0 && msg.currentNode < MAX_VERTICES) {
+                    if (nodeQueues[msg.currentNode].occupiedBy == msg.travelerIndex) {
+                        nodeQueues[msg.currentNode].occupiedBy = -1;
+                    }
+                    if (nodeQueues[msg.currentNode].queueSize > 0) {
+                        startCollectionWindow(nodeQueues, msg.currentNode, now);
+                    }
+                }
+
+                printf("[PID=%d] finished\n", (int)msg.pid);
+            }
+
+            fflush(stdout);
         }
     }
 }
@@ -523,10 +720,9 @@ static void startHandler(int sig) {
 }
 
 static void childMain(const char *filename, int travelerIndex,
-                      int src, int dest, int writeFd) {
+                      int src, int dest, int writeFd, int approvalFd) {
     FILE *fp = NULL;
     Graph *g;
-    TravelerMessage msg;
 
     signal(SIGUSR1, startHandler);
     pause();
@@ -538,25 +734,28 @@ static void childMain(const char *filename, int travelerIndex,
 
     if (g == NULL) {
         close(writeFd);
+        close(approvalFd);
         exit(1);
     }
 
     DijkstraResult result = dijkstra(g, src, dest);
 
     if (!result.found || result.pathLength <= 0) {
-        msg.pid = getpid();
-        msg.travelerIndex = travelerIndex;
-        msg.currentNode = dest;
-        msg.nextNode = -1;
-        msg.isDestination = 0;
-        msg.isFinished = 1;
-        msg.isWaitingForNode = 0;
-        msg.isInsideNode = 0;
-        write(writeFd, &msg, sizeof(msg));
+        TravelerMessage msg = {
+            .type = MSG_FINISHED,
+            .pid = getpid(),
+            .travelerIndex = travelerIndex,
+            .currentNode = dest,
+            .nextNode = -1,
+            .nextEdgeWeight = 0,
+            .isDestination = 0
+        };
+        sendTravelerMessage(writeFd, &msg);
 
         freeDijkstraResult(&result);
         freeGraph(g);
         close(writeFd);
+        close(approvalFd);
         exit(0);
     }
 
@@ -564,85 +763,78 @@ static void childMain(const char *filename, int travelerIndex,
         int current = result.path[i];
         int next = (i < result.pathLength - 1) ? result.path[i + 1] : -1;
         int isDest = (i == result.pathLength - 1);
+        int nextWeight = 0;
 
-        sem_t *nodeSem = openNodeSemaphore(current);
-        if (nodeSem == SEM_FAILED) {
-            perror("sem_open");
+        if (!isDest) {
+            nextWeight = getPathEdgeWeight(g, current, next);
+            if (nextWeight <= 0) nextWeight = 1;
+        }
+
+        TravelerMessage req = {
+            .type = MSG_REQUEST_NODE,
+            .pid = getpid(),
+            .travelerIndex = travelerIndex,
+            .currentNode = current,
+            .nextNode = next,
+            .nextEdgeWeight = nextWeight,
+            .isDestination = isDest
+        };
+        sendTravelerMessage(writeFd, &req);
+
+        if (!waitForEnterApproval(approvalFd, current)) {
             freeDijkstraResult(&result);
             freeGraph(g);
             close(writeFd);
+            close(approvalFd);
             exit(1);
         }
 
-        if (sem_trywait(nodeSem) == -1) {
-            if (errno == EAGAIN) {
-                msg.pid = getpid();
-                msg.travelerIndex = travelerIndex;
-                msg.currentNode = current;
-                msg.nextNode = next;
-                msg.isDestination = isDest;
-                msg.isFinished = 0;
-                msg.isWaitingForNode = 1;
-                msg.isInsideNode = 0;
-                write(writeFd, &msg, sizeof(msg));
-
-                sem_wait(nodeSem);
-            } else {
-                perror("sem_trywait");
-                sem_close(nodeSem);
-                freeDijkstraResult(&result);
-                freeGraph(g);
-                close(writeFd);
-                exit(1);
-            }
-        }
-
-        msg.pid = getpid();
-        msg.travelerIndex = travelerIndex;
-        msg.currentNode = current;
-        msg.nextNode = next;
-        msg.isDestination = isDest;
-        msg.isFinished = 0;
-        msg.isWaitingForNode = 0;
-        msg.isInsideNode = 1;
-        write(writeFd, &msg, sizeof(msg));
+        TravelerMessage entered = {
+            .type = MSG_ENTERED_NODE,
+            .pid = getpid(),
+            .travelerIndex = travelerIndex,
+            .currentNode = current,
+            .nextNode = next,
+            .nextEdgeWeight = nextWeight,
+            .isDestination = isDest
+        };
+        sendTravelerMessage(writeFd, &entered);
 
         sleepSeconds(NODE_STAY_SECONDS);
 
-        sem_post(nodeSem);
-        sem_close(nodeSem);
-
         if (!isDest) {
-            msg.pid = getpid();
-            msg.travelerIndex = travelerIndex;
-            msg.currentNode = current;
-            msg.nextNode = next;
-            msg.isDestination = 0;
-            msg.isFinished = 0;
-            msg.isWaitingForNode = 0;
-            msg.isInsideNode = 0;
-            write(writeFd, &msg, sizeof(msg));
+            TravelerMessage leaving = {
+                .type = MSG_LEAVING_NODE,
+                .pid = getpid(),
+                .travelerIndex = travelerIndex,
+                .currentNode = current,
+                .nextNode = next,
+                .nextEdgeWeight = nextWeight,
+                .isDestination = 0
+            };
+            sendTravelerMessage(writeFd, &leaving);
 
-            int weight = getPathEdgeWeight(g, current, next);
-            double duration = weight * SECONDS_PER_WEIGHT;
+            double duration = nextWeight * SECONDS_PER_WEIGHT;
             if (duration < MIN_EDGE_DURATION) duration = MIN_EDGE_DURATION;
             sleepSeconds(duration);
         }
     }
 
-    msg.pid = getpid();
-    msg.travelerIndex = travelerIndex;
-    msg.currentNode = dest;
-    msg.nextNode = -1;
-    msg.isDestination = 1;
-    msg.isFinished = 1;
-    msg.isWaitingForNode = 0;
-    msg.isInsideNode = 0;
-    write(writeFd, &msg, sizeof(msg));
+    TravelerMessage finished = {
+        .type = MSG_FINISHED,
+        .pid = getpid(),
+        .travelerIndex = travelerIndex,
+        .currentNode = dest,
+        .nextNode = -1,
+        .nextEdgeWeight = 0,
+        .isDestination = 1
+    };
+    sendTravelerMessage(writeFd, &finished);
 
     freeDijkstraResult(&result);
     freeGraph(g);
     close(writeFd);
+    close(approvalFd);
     exit(0);
 }
 
@@ -651,6 +843,11 @@ static int spawnTravelers(Traveler *travelers, int numTravelers, const char *fil
         resetTravelerState(&travelers[i]);
 
         if (pipe(travelers[i].pipeFd) < 0) {
+            perror("pipe");
+            return 0;
+        }
+
+        if (pipe(travelers[i].controlPipe) < 0) {
             perror("pipe");
             return 0;
         }
@@ -667,17 +864,23 @@ static int spawnTravelers(Traveler *travelers, int numTravelers, const char *fil
 
         if (pid == 0) {
             close(travelers[i].pipeFd[0]);
+            close(travelers[i].controlPipe[1]);
 
             childMain(filename,
                       i,
                       travelers[i].src,
                       travelers[i].dest,
-                      travelers[i].pipeFd[1]);
+                      travelers[i].pipeFd[1],
+                      travelers[i].controlPipe[0]);
         }
 
         travelers[i].pid = pid;
+
         close(travelers[i].pipeFd[1]);
         travelers[i].pipeFd[1] = -1;
+
+        close(travelers[i].controlPipe[0]);
+        travelers[i].controlPipe[0] = -1;
 
         int flags = fcntl(travelers[i].pipeFd[0], F_GETFL, 0);
         if (flags >= 0) {
@@ -688,10 +891,11 @@ static int spawnTravelers(Traveler *travelers, int numTravelers, const char *fil
     return 1;
 }
 
-void runGraphVisualizer(const char *filename) {
+void runGraphVisualizer(const char *filename, SchedulerType scheduler) {
     const int W = 900;
     const int H = 700;
     int isPaused = 0;
+    long long arrivalCounter = 0;
 
     FILE *fp = NULL;
     Graph *algoGraph = loadGraphOnly(filename, &fp);
@@ -706,6 +910,9 @@ void runGraphVisualizer(const char *filename) {
         CloseWindow();
         return;
     }
+
+    NodeQueue nodeQueues[MAX_VERTICES];
+    initNodeQueues(nodeQueues, algoGraph->numVertices);
 
     int numTravelers = 0;
     skipCommentsWS(fp);
@@ -736,8 +943,8 @@ void runGraphVisualizer(const char *filename) {
             return;
         }
 
-        if (s < 0 || s >= algoGraph->numVertices
-            || d < 0 || d >= algoGraph->numVertices) {
+        if (s < 0 || s >= algoGraph->numVertices ||
+            d < 0 || d >= algoGraph->numVertices) {
             printf("Traveler %d out of range\n", i + 1);
             fclose(fp);
             free(travelers);
@@ -758,17 +965,7 @@ void runGraphVisualizer(const char *filename) {
                                        travelers[i].dest);
     }
 
-    if (!createAllNodeSemaphores(algoGraph->numVertices)) {
-        for (int i = 0; i < numTravelers; i++) {
-            freeDijkstraResult(&travelers[i].result);
-        }
-        free(travelers);
-        freeGraph(algoGraph);
-        return;
-    }
-
     if (!spawnTravelers(travelers, numTravelers, filename)) {
-        unlinkAllNodeSemaphores(algoGraph->numVertices);
         for (int i = 0; i < numTravelers; i++) {
             freeDijkstraResult(&travelers[i].result);
         }
@@ -783,19 +980,33 @@ void runGraphVisualizer(const char *filename) {
             cleanupTravelerProcess(&travelers[i]);
             freeDijkstraResult(&travelers[i].result);
         }
-        unlinkAllNodeSemaphores(algoGraph->numVertices);
         free(travelers);
         freeGraph(algoGraph);
         return;
     }
 
-    InitWindow(W, H, "Graph Visualizer - Milestone 6");
+    InitWindow(W, H, "Graph Visualizer - Milestone 7");
     SetTargetFPS(60);
     computeLayout(&vg, W, H);
     Font font = GetFontDefault();
 
     while (!WindowShouldClose()) {
-        processTravelerMessages(travelers, numTravelers, &vg);
+        double now = GetTime();
+
+        processTravelerMessages(travelers,
+                                numTravelers,
+                                &vg,
+                                nodeQueues,
+                                scheduler,
+                                &arrivalCounter,
+                                now);
+
+        dispatchReadyNodes(nodeQueues,
+                           algoGraph->numVertices,
+                           travelers,
+                           numTravelers,
+                           scheduler,
+                           now);
 
         for (int i = 0; i < numTravelers; i++) {
             reapFinishedTraveler(&travelers[i]);
@@ -813,7 +1024,11 @@ void runGraphVisualizer(const char *filename) {
         DrawRectangle(0, 0, W, TOP_BAR_HEIGHT, (Color){20, 24, 36, 255});
         DrawLine(0, TOP_BAR_HEIGHT, W, TOP_BAR_HEIGHT, (Color){60, 70, 100, 180});
 
-        const char *title = "Graph Visualizer - Milestone 6";
+        char title[128];
+        snprintf(title, sizeof(title),
+                 "Graph Visualizer - Milestone 7 (%s)",
+                 schedulerName(scheduler));
+
         Vector2 ts = MeasureTextEx(font, title, 26, 1);
         DrawTextEx(font,
                    title,
@@ -891,10 +1106,12 @@ void runGraphVisualizer(const char *filename) {
                     resetTravelerState(&travelers[i]);
                 }
 
-                unlinkAllNodeSemaphores(algoGraph->numVertices);
-                createAllNodeSemaphores(algoGraph->numVertices);
+                if (!spawnTravelers(travelers, numTravelers, filename)) {
+                    isPaused = 0;
+                }
 
-                spawnTravelers(travelers, numTravelers, filename);
+                initNodeQueues(nodeQueues, algoGraph->numVertices);
+                arrivalCounter = 0;
                 isPaused = 0;
             }
         }
@@ -1012,12 +1229,17 @@ void runGraphVisualizer(const char *filename) {
 
         int panelX = 20;
         int panelY = TOP_BAR_HEIGHT + 20;
+
+        char schedLine[64];
+        snprintf(schedLine, sizeof(schedLine), "Scheduler: %s", schedulerName(scheduler));
+        DrawTextEx(font, schedLine, (Vector2){panelX, panelY}, 16, 1, YELLOW);
+
         DrawTextEx(font, "Travelers:",
-                   (Vector2){panelX, panelY}, 16, 1, WHITE);
+                   (Vector2){panelX, panelY + 24}, 16, 1, WHITE);
 
         for (int i = 0; i < numTravelers; i++) {
             Traveler *t = &travelers[i];
-            int yy = panelY + 24 + i * 22;
+            int yy = panelY + 48 + i * 22;
 
             Color panelColor = t->color;
             if (t->waitingForNode) panelColor = ORANGE;
@@ -1070,7 +1292,6 @@ void runGraphVisualizer(const char *filename) {
         freeDijkstraResult(&travelers[i].result);
     }
 
-    unlinkAllNodeSemaphores(algoGraph->numVertices);
     free(travelers);
     freeGraph(algoGraph);
 }

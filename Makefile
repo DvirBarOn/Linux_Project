@@ -34,13 +34,19 @@ sim: Dijkstra.c GraphVisual.c main.c Dijkstra.h
 milestone4: sim4
 
 sim4: Dijkstra.c GraphVisual.c main.c Dijkstra.h
-	;;;;$(CC) $(CFLAGS) Dijkstra.c GraphVisual.c main.c -o sim4 $(RAYLIB)
+	$(CC) $(CFLAGS) Dijkstra.c GraphVisual.c main.c -o sim4 $(RAYLIB)
 
 # ---------- milestone 5: IPC-based version ----------
 milestone5: sim
+
+# ---------- milestone 6: synchronized node access ----------
+milestone6: sim
+
+# ---------- milestone 7: scheduler selection ----------
+milestone7: sim
 
 # ---------- housekeeping ----------
 clean:
 	rm -f dijkstra sim sim4 *.o
 
-.PHONY: milestone1 milestone2 milestone3 milestone4 milestone5 clean
+.PHONY: milestone1 milestone2 milestone3 milestone4 milestone5 milestone6 milestone7 clean

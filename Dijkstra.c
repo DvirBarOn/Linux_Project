@@ -24,6 +24,7 @@
 
 /* ===== helpers ===== */
 
+/* Skip whitespace and full comment lines that begin with '#'. */
 static void skipCommentsAndWS(FILE *fp) {
     int c;
     for (;;) {
@@ -37,11 +38,13 @@ static void skipCommentsAndWS(FILE *fp) {
     }
 }
 
+/* Read a single integer from the file after skipping whitespace and comments. */
 static int readInt(FILE *fp, int *out) {
     skipCommentsAndWS(fp);
     return fscanf(fp, "%d", out) == 1;
 }
 
+/* Return 1 if path points to a readable regular file, otherwise 0. */
 static int fileReadable(const char *path) {
     if (path == NULL) return 0;
     struct stat st;
@@ -81,6 +84,7 @@ static int getExecutableDir(char *out, size_t outsize) {
 
 /* ===== path resolution ===== */
 
+/* Resolve the graph path by checking the user path, cwd, executable dir, then SOURCE_DIR. */
 char *resolveGraphPath(const char *userArg) {
     /* 1) user-supplied */
     if (userArg && fileReadable(userArg)) {
@@ -116,6 +120,7 @@ char *resolveGraphPath(const char *userArg) {
 
 /* ===== graph lifecycle ===== */
 
+/* Allocate the graph object and initialize its adjacency-list array. */
 Graph *createGraph(int n) {
     if (n <= 0) return NULL;
     Graph *g = malloc(sizeof(Graph));
@@ -127,6 +132,7 @@ Graph *createGraph(int n) {
     return g;
 }
 
+/* Add one directed weighted edge at the head of the source vertex adjacency list. */
 void addEdge(Graph *g, int from, int to, int w) {
     if (g == NULL) return;
     Edge *e = malloc(sizeof(Edge));
@@ -137,6 +143,7 @@ void addEdge(Graph *g, int from, int to, int w) {
     g->adj[from] = e;
 }
 
+/* Free every edge node and then free the graph container itself. */
 void freeGraph(Graph *g) {
     if (g == NULL) return;
     for (int i = 0; i < g->numVertices; i++) {
@@ -153,6 +160,7 @@ void freeGraph(Graph *g) {
 
 /* ===== algorithm ===== */
 
+/* Return the index of the unvisited vertex with the current minimum distance. */
 static int minDist(int dist[], int visited[], int n) {
     int min = INF, idx = -1;
     for (int i = 0; i < n; i++) {
@@ -161,6 +169,7 @@ static int minDist(int dist[], int visited[], int n) {
     return idx;
 }
 
+/* Run Dijkstra on the graph and reconstruct the shortest path from src to dest. */
 DijkstraResult dijkstra(Graph *g, int src, int dest) {
     DijkstraResult result = {0, 0, NULL, 0};
     if (g == NULL) return result;
@@ -225,12 +234,14 @@ DijkstraResult dijkstra(Graph *g, int src, int dest) {
     return result;
 }
 
+/* Free the heap-allocated path array stored in a DijkstraResult and reset its fields. */
 void freeDijkstraResult(DijkstraResult *r) {
     if (!r) return;
     free(r->path);
     r->path = NULL; r->pathLength = 0; r->found = 0; r->distance = 0;
 }
 
+/* Print the shortest path followed by the total distance, one per milestone 1 format. */
 void printDijkstraResult(const DijkstraResult *r) {
     if (!r) return;
     if (!r->found) { printf("No path found\n"); return; }
@@ -243,6 +254,7 @@ void printDijkstraResult(const DijkstraResult *r) {
 
 /* ===== loaders ===== */
 
+/* Load a full milestone 1 input file: graph first, then a single src/dest pair. */
 Graph *loadGraphFromFile(const char *filename, int *src, int *dest) {
     FILE *fp = fopen(filename, "r");
     if (!fp) { printf("File error\n"); return NULL; }
@@ -276,6 +288,7 @@ Graph *loadGraphFromFile(const char *filename, int *src, int *dest) {
     return g;
 }
 
+/* Load only the graph section and return the still-open FILE* for later traveler parsing. */
 Graph *loadGraphOnly(const char *filename, FILE **out_fp) {
     *out_fp = NULL;
     FILE *fp = fopen(filename, "r");

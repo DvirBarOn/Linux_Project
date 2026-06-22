@@ -146,10 +146,12 @@ typedef struct {
 
 /* ===== helpers ===== */
 
+/* Convert the scheduler enum to the text shown in the GUI side panel and title. */
 static const char *schedulerName(SchedulerType scheduler) {
     return (scheduler == SCHED_SJF) ? "SJF" : "FCFS";
 }
 
+/* Reset every node queue so no traveler is occupying or waiting at startup/reset. */
 static void initNodeQueues(NodeQueue *nodeQueues, int numVertices) {
     for (int i = 0; i < numVertices; i++) {
         nodeQueues[i].occupiedBy = -1;
@@ -159,6 +161,7 @@ static void initNodeQueues(NodeQueue *nodeQueues, int numVertices) {
     }
 }
 
+/* Append one waiting traveler record to the queue of the requested node. */
 static void enqueueTraveler(NodeQueue *nodeQueues, const WaitingTraveler *wt) {
     int node = wt->currentNode;
 
@@ -169,6 +172,7 @@ static void enqueueTraveler(NodeQueue *nodeQueues, const WaitingTraveler *wt) {
     nodeQueues[node].queueSize++;
 }
 
+/* Choose the next traveler index to dispatch according to FCFS or SJF policy. */
 static int pickNextTravelerIndex(const NodeQueue *nodeQueues, int node, SchedulerType scheduler) {
     if (node < 0 || node >= MAX_VERTICES) return -1;
     if (nodeQueues[node].queueSize <= 0) return -1;
@@ -196,6 +200,7 @@ static int pickNextTravelerIndex(const NodeQueue *nodeQueues, int node, Schedule
     return best;
 }
 
+/* Remove one waiting traveler from a node queue and compact the remaining entries. */
 static WaitingTraveler removeWaitingTraveler(NodeQueue *nodeQueues, int node, int idx) {
     WaitingTraveler removed = {0};
 
@@ -212,16 +217,19 @@ static WaitingTraveler removeWaitingTraveler(NodeQueue *nodeQueues, int node, in
     return removed;
 }
 
+/* Send one structured traveler status message from a child process to the parent. */
 static int sendTravelerMessage(int fd, const TravelerMessage *msg) {
     ssize_t n = write(fd, msg, sizeof(*msg));
     return (n == (ssize_t)sizeof(*msg));
 }
 
+/* Send a node-entry approval from the parent process to a child traveler. */
 static int sendEnterApproval(int fd, int node) {
     ssize_t n = write(fd, &node, sizeof(node));
     return (n == (ssize_t)sizeof(node));
 }
 
+/* Block in the child until the parent approves entry to the expected node. */
 static int waitForEnterApproval(int fd, int expectedNode) {
     int approvedNode = -1;
     ssize_t n = read(fd, &approvedNode, sizeof(approvedNode));
@@ -231,6 +239,7 @@ static int waitForEnterApproval(int fd, int expectedNode) {
     return (approvedNode == expectedNode);
 }
 
+/* Start the short collection window that lets multiple contenders reach the same free node. */
 static void startCollectionWindow(NodeQueue *nodeQueues, int node, double now) {
     if (node < 0 || node >= MAX_VERTICES) return;
     if (nodeQueues[node].occupiedBy != -1) return;
@@ -241,6 +250,7 @@ static void startCollectionWindow(NodeQueue *nodeQueues, int node, double now) {
     nodeQueues[node].collectionStartTime = now;
 }
 
+/* Dispatch the best waiting traveler for a node and send that traveler an approval message. */
 static void tryDispatchNextTraveler(NodeQueue *nodeQueues,
                                     Traveler *travelers,
                                     int numTravelers,
@@ -267,6 +277,7 @@ static void tryDispatchNextTraveler(NodeQueue *nodeQueues,
     }
 }
 
+/* Scan all nodes and dispatch any queue whose collection window has expired. */
 static void dispatchReadyNodes(NodeQueue *nodeQueues,
                                int numVertices,
                                Traveler *travelers,
@@ -294,6 +305,7 @@ static void dispatchReadyNodes(NodeQueue *nodeQueues,
     }
 }
 
+/* Sleep for a floating-point number of seconds using nanosleep. */
 static void sleepSeconds(double seconds) {
     if (seconds <= 0.0) return;
 
@@ -307,6 +319,7 @@ static void sleepSeconds(double seconds) {
     nanosleep(&ts, NULL);
 }
 
+/* Reset one traveler's runtime and animation state before spawning or after reset. */
 static void resetTravelerState(Traveler *t) {
     t->pipeFd[0] = -1;
     t->pipeFd[1] = -1;
@@ -333,6 +346,7 @@ static void resetTravelerState(Traveler *t) {
     t->waitFromNode = -1;
 }
 
+/* Stop a traveler process if needed and close every pipe file descriptor it owns. */
 static void cleanupTravelerProcess(Traveler *t) {
     if (t->pid > 0 && !t->signaled) {
         kill(t->pid, SIGTERM);
@@ -360,6 +374,7 @@ static void cleanupTravelerProcess(Traveler *t) {
     t->pid = 0;
 }
 
+/* Reap a child process once the parent has marked that traveler as finished. */
 static void reapFinishedTraveler(Traveler *t) {
     if (t->pid > 0 && t->finished && !t->signaled) {
         waitpid(t->pid, NULL, 0);
@@ -368,6 +383,7 @@ static void reapFinishedTraveler(Traveler *t) {
     }
 }
 
+/* Compute the start/end drawing points of an edge after applying node radius and edge offset. */
 static void getEdgeEndpoints(VisGraph *vg, int from, int to,
                              Vector2 *start, Vector2 *end) {
     Vector2 p1 = vg->pos[from];
@@ -393,6 +409,7 @@ static void getEdgeEndpoints(VisGraph *vg, int from, int to,
     end->y = p2.y - ny * NODE_RADIUS + oy;
 }
 
+/* Place all graph vertices in a circular layout inside the simulation window. */
 static void computeLayout(VisGraph *vg, int W, int H) {
     int n = vg->numVertices;
     float cx = W / 2.0f;
@@ -411,6 +428,7 @@ static void computeLayout(VisGraph *vg, int W, int H) {
     }
 }
 
+/* Load only the visual edge list used for drawing nodes, edges, and weights. */
 static int loadVisGraph(const char *path, VisGraph *vg) {
     FILE *fp = fopen(path, "r");
     if (!fp) return 0;
@@ -445,6 +463,7 @@ static int loadVisGraph(const char *path, VisGraph *vg) {
     return 1;
 }
 
+/* Return the weight of a visual edge so animation timing can match the drawn graph. */
 static int getEdgeWeight(const VisGraph *vg, int from, int to) {
     for (int i = 0; i < vg->numEdges; i++) {
         if (vg->edges[i].from == from && vg->edges[i].to == to) {
@@ -454,6 +473,7 @@ static int getEdgeWeight(const VisGraph *vg, int from, int to) {
     return 1;
 }
 
+/* Return the weight of one edge along a traveler's shortest path in the adjacency list. */
 static int getPathEdgeWeight(Graph *g, int from, int to) {
     for (Edge *e = g->adj[from]; e != NULL; e = e->next) {
         if (e->to == to) {
@@ -463,6 +483,7 @@ static int getPathEdgeWeight(Graph *g, int from, int to) {
     return 1;
 }
 
+/* Draw a triangular arrow head that points in the direction of a line segment. */
 static void drawArrowHead(Vector2 tip, float dx, float dy) {
     float len = sqrtf(dx * dx + dy * dy);
     if (len < 0.001f) return;
@@ -483,6 +504,7 @@ static void drawArrowHead(Vector2 tip, float dx, float dy) {
     DrawTriangle(tip, b1, b2, ARROW_COLOR);
 }
 
+/* Draw one graph edge, including self-loops, arrow heads, and weight labels. */
 static void drawEdge(VisGraph *vg, int ei, Font font) {
     RawEdge *e = &vg->edges[ei];
     Vector2 p1 = vg->pos[e->from];
@@ -531,6 +553,7 @@ static void drawEdge(VisGraph *vg, int ei, Font font) {
                15, 1, WEIGHT_TEXT);
 }
 
+/* Draw one node and color it according to whether it is a source, destination, or occupied. */
 static void drawNode(VisGraph *vg, int i, Font font,
                      Traveler *travelers, int numTravelers) {
     Vector2 p = vg->pos[i];
@@ -564,6 +587,7 @@ static void drawNode(VisGraph *vg, int i, Font font,
                20, 1, NODE_TEXT);
 }
 
+/* Pick a stable color from the palette for traveler i. */
 static Color travelerColor(int idx) {
     static const Color palette[] = {
         {255, 220,  60, 255},
@@ -588,6 +612,7 @@ static Color travelerColor(int idx) {
     return palette[idx % n];
 }
 
+/* Read all pending child messages, update traveler state, and enqueue node requests. */
 static void processTravelerMessages(Traveler *travelers,
                                     int numTravelers,
                                     const VisGraph *vg,
@@ -715,10 +740,12 @@ static void processTravelerMessages(Traveler *travelers,
     }
 }
 
+/* Minimal signal handler used only to wake children from pause() when Play is pressed. */
 static void startHandler(int sig) {
     (void)sig;
 }
 
+/* Child-process entry point: compute one path and report node transitions to the parent. */
 static void childMain(const char *filename, int travelerIndex,
                       int src, int dest, int writeFd, int approvalFd) {
     FILE *fp = NULL;
@@ -838,6 +865,7 @@ static void childMain(const char *filename, int travelerIndex,
     exit(0);
 }
 
+/* Create pipes and fork one child process for each traveler in the simulation. */
 static int spawnTravelers(Traveler *travelers, int numTravelers, const char *filename) {
     for (int i = 0; i < numTravelers; i++) {
         resetTravelerState(&travelers[i]);
@@ -891,6 +919,7 @@ static int spawnTravelers(Traveler *travelers, int numTravelers, const char *fil
     return 1;
 }
 
+/* Main GUI entry point: load the graph, spawn travelers, run scheduling, and draw everything. */
 void runGraphVisualizer(const char *filename, SchedulerType scheduler) {
     const int W = 900;
     const int H = 700;

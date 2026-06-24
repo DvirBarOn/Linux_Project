@@ -1,20 +1,61 @@
-/* Enable POSIX APIs (kill, waitpid, SIGTERM, pause) under -std=c11. */
+/* ============================================================================
+ *  GraphVisual.c  —  Multi-traveler shortest-path simulator (Milestones 4-7)
+ * ============================================================================
+ *
+ *  BIG PICTURE
+ *  -----------
+ *  This file runs ONE parent process (the GUI) plus ONE child process per
+ *  "traveler". Each traveler walks its Dijkstra shortest path through the
+ *  graph. The parent draws everything and acts as a traffic controller that
+ *  decides which traveler is allowed to occupy a node at any moment.
+ *
+ *  PROCESS MODEL (this is the part exam tasks usually touch)
+ *  ---------------------------------------------------------
+ *    parent (runGraphVisualizer)
+ *      |
+ *      |-- fork() --> child 0  (childMain)   \
+ *      |-- fork() --> child 1  (childMain)    > one child per traveler
+ *      |-- fork() --> child 2  (childMain)   /
+ *
+ *  COMMUNICATION: two pipes per traveler
+ *      data pipe     child -> parent : child reports "I want node X / I
+ *                                       entered / I'm leaving / I finished"
+ *                                       (TravelerMessage structs)
+ *      control pipe  parent -> child : parent sends "approved, enter node X"
+ *                                       (a single int)
+ *
+ *  SIGNALS used between parent and child:
+ *      SIGUSR1  parent -> child : "Play pressed, start moving" (wakes pause())
+ *      SIGSTOP  parent -> child : freeze the child   (Pause button)
+ *      SIGCONT  parent -> child : unfreeze the child (Resume button)
+ *      SIGTERM  parent -> child : kill the child immediately (Reset / quit)
+ *               ^^^^^^ this is "the signal that kills it" in the sample task.
+ *
+ *  CHILD LIFECYCLE (childMain): install SIGUSR1 handler -> pause() until Play
+ *      -> run Dijkstra -> for each node: request, wait approval, enter, sleep,
+ *      leave (sleep across edge) -> send FINISHED -> exit(0).
+ *
+ *  All sleeping goes through sleepSeconds() -> nanosleep().
+ * ============================================================================ */
+
+/* Enable POSIX APIs (kill, waitpid, SIGTERM, pause) under -std=c11.
+ * Without this define the compiler hides fork/kill/pause/etc. in strict C11. */
 #define _POSIX_C_SOURCE 200809L
 
-#include "raylib.h"
-#include "Dijkstra.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <math.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <signal.h>
-#include <errno.h>
-#include <ctype.h>
-#include <fcntl.h>
-#include <time.h>
+#include "raylib.h"        /* GUI: window, drawing, input, timing (GetTime) */
+#include "Dijkstra.h"      /* Graph type, dijkstra(), loadGraphOnly(), etc.   */
+#include <stdio.h>         /* printf, fscanf, FILE                            */
+#include <stdlib.h>        /* malloc/calloc/free, exit                        */
+#include <math.h>          /* sqrtf, cosf, sinf for geometry                  */
+#include <string.h>        /* (string helpers)                                */
+#include <unistd.h>        /* fork, pipe, read, write, close, pause           */
+#include <sys/types.h>     /* pid_t                                           */
+#include <sys/wait.h>      /* waitpid                                         */
+#include <signal.h>        /* kill, signal, SIGUSR1/SIGTERM/SIGSTOP/SIGCONT   */
+#include <errno.h>         /* errno                                           */
+#include <ctype.h>         /* isspace                                         */
+#include <fcntl.h>         /* fcntl + O_NONBLOCK (non-blocking pipe reads)    */
+#include <time.h>          /* struct timespec, nanosleep                      */
 
 /* Skip whitespace and '#' comment lines in the open file. */
 static void skipCommentsWS(FILE *fp) {
@@ -30,14 +71,15 @@ static void skipCommentsWS(FILE *fp) {
     }
 }
 
-/* ===== visual constants ===== */
-#define MAX_VERTICES   15
-#define MAX_TRAVELERS  16
-#define NODE_RADIUS    28
-#define ARROW_HEAD     12
-#define ARROW_ANGLE    0.42f
-#define EDGE_OFFSET    6.0f
+/* ===== visual + simulation constants ===== */
+#define MAX_VERTICES   15        /* hard cap on graph nodes (fixed arrays)      */
+#define MAX_TRAVELERS  16        /* hard cap on travelers / child processes     */
+#define NODE_RADIUS    28        /* drawn circle radius for a node, in pixels   */
+#define ARROW_HEAD     12        /* length of an edge arrow head                */
+#define ARROW_ANGLE    0.42f     /* half-angle of the arrow head triangle       */
+#define EDGE_OFFSET    6.0f      /* sideways shift so A->B and B->A don't overlap*/
 
+/* Color palette (raylib Color = R,G,B,A bytes). Pure cosmetics. */
 #define BG_COLOR       (Color){15, 17, 26, 255}
 #define NODE_COLOR     (Color){40, 120, 220, 255}
 #define NODE_OUTLINE   (Color){100, 180, 255, 255}
@@ -48,100 +90,123 @@ static void skipCommentsWS(FILE *fp) {
 #define WEIGHT_TEXT    (Color){255, 220, 80, 255}
 #define TITLE_COLOR    (Color){100, 180, 255, 255}
 
-#define TOP_BAR_HEIGHT 80
+#define TOP_BAR_HEIGHT 80        /* height of the top toolbar (Play/Reset)      */
 #define BUTTON_W       120
 #define BUTTON_H       40
 #define BUTTON_GAP     16
 
-/* edge movement timing */
+/* edge movement timing: how long a traveler takes to cross an edge.
+ * Travel time = weight * SECONDS_PER_WEIGHT, but never below MIN_EDGE_DURATION. */
 #define SECONDS_PER_WEIGHT    0.4
 #define MIN_EDGE_DURATION     0.4
 
-/* milestone 6/7 */
-#define NODE_STAY_SECONDS       1.0
-#define COLLECTION_WINDOW_SECONDS 0.20
+/* milestone 6/7 timing */
+#define NODE_STAY_SECONDS       1.0   /* how long a traveler sits inside a node  */
+#define COLLECTION_WINDOW_SECONDS 0.20/* grace period to gather rival travelers
+                                       * competing for the same free node before
+                                       * the scheduler picks a winner            */
 
+/* Which scheduling policy decides who enters a contested node first. */
 typedef enum {
-    SCHED_FCFS,
-    SCHED_SJF
+    SCHED_FCFS,   /* First Come First Served: earliest arrival wins           */
+    SCHED_SJF     /* Shortest Job First: smallest next-edge weight wins       */
 } SchedulerType;
 
+/* One directed edge exactly as read from the graph file (for DRAWING only). */
 typedef struct RawEdge {
-    int from;
-    int to;
-    int weight;
+    int from;     /* source vertex index      */
+    int to;       /* destination vertex index */
+    int weight;   /* edge cost / travel weight*/
 } RawEdge;
 
+/* The "visual" graph: the raw edge list plus on-screen positions of nodes.
+ * This is separate from the algorithmic Graph (adjacency list) used by Dijkstra. */
 typedef struct {
-    int numVertices;
-    int numEdges;
-    RawEdge edges[MAX_VERTICES * MAX_VERTICES];
-    Vector2 pos[MAX_VERTICES];
+    int numVertices;                        /* node count                      */
+    int numEdges;                           /* edge count                      */
+    RawEdge edges[MAX_VERTICES * MAX_VERTICES];/* every edge, for drawing       */
+    Vector2 pos[MAX_VERTICES];              /* pixel (x,y) of each node         */
 } VisGraph;
 
+/* The kinds of status messages a child sends to the parent over the data pipe. */
 typedef enum {
-    MSG_REQUEST_NODE,
-    MSG_ENTERED_NODE,
-    MSG_LEAVING_NODE,
-    MSG_FINISHED
+    MSG_REQUEST_NODE,   /* "I want to enter node X" (asks permission)          */
+    MSG_ENTERED_NODE,   /* "I am now inside node X"                            */
+    MSG_LEAVING_NODE,   /* "I am leaving node X toward node Y"                 */
+    MSG_FINISHED        /* "I reached my destination / I'm done"               */
 } MessageType;
 
+/* The actual packet written through the pipe. A whole struct is written/read
+ * at once with write()/read(), so both sides agree on the exact byte layout. */
 typedef struct {
-    MessageType type;
-    pid_t pid;
-    int travelerIndex;
-    int currentNode;
-    int nextNode;
-    int nextEdgeWeight;
-    int isDestination;
+    MessageType type;        /* which event this message describes              */
+    pid_t pid;               /* child's process id (used for the printf logs)  */
+    int travelerIndex;       /* which traveler (0..numTravelers-1) sent it     */
+    int currentNode;         /* node the traveler is at / talking about        */
+    int nextNode;            /* node it intends to move to next (-1 if none)    */
+    int nextEdgeWeight;      /* weight of currentNode->nextNode (for SJF)       */
+    int isDestination;       /* 1 if currentNode is this traveler's final dest  */
 } TravelerMessage;
 
+/* A traveler currently WAITING in a node's queue for permission to enter it. */
 typedef struct {
-    int travelerIndex;
-    pid_t pid;
-    int currentNode;
-    int nextNode;
-    int nextEdgeWeight;
-    long long arrivalOrder;
+    int travelerIndex;       /* who is waiting                                  */
+    pid_t pid;               /* its pid (logging)                               */
+    int currentNode;         /* the node it wants to enter                      */
+    int nextNode;            /* where it will go after (for SJF tie-breaking)   */
+    int nextEdgeWeight;      /* weight used by the SJF policy                    */
+    long long arrivalOrder;  /* global counter: who asked first (for FCFS)      */
 } WaitingTraveler;
 
+/* Per-node "gatekeeper" state: who is inside, and who is lined up waiting. */
 typedef struct {
-    int occupiedBy;                  /* -1 if free */
-    WaitingTraveler queue[MAX_TRAVELERS];
-    int queueSize;
+    int occupiedBy;                    /* traveler index inside, or -1 if free  */
+    WaitingTraveler queue[MAX_TRAVELERS];/* travelers waiting for this node     */
+    int queueSize;                     /* how many are waiting                  */
 
-    int collecting;
-    double collectionStartTime;
+    int collecting;                    /* 1 while the collection window is open */
+    double collectionStartTime;        /* when that window started (GetTime)    */
 } NodeQueue;
 
+/* The parent's full record for ONE traveler: its plan, its child process,
+ * its pipes, and all the bookkeeping needed to animate and schedule it.
+ * Grouped below into: plan / process / pipes / logical state / animation. */
 typedef struct {
-    int src;
-    int dest;
-    DijkstraResult result;
-    pid_t pid;
-    Color color;
+    /* --- the plan --- */
+    int src;                 /* start vertex                                    */
+    int dest;                /* goal vertex                                     */
+    DijkstraResult result;   /* the computed shortest path (path[], length...)  */
 
-    int arrived;
-    int signaled;
+    /* --- the child process --- */
+    pid_t pid;               /* child's pid; 0 means "no live child"            */
+    Color color;             /* this traveler's dot color in the GUI            */
 
-    int pipeFd[2];        /* child -> parent */
-    int controlPipe[2];   /* parent -> child */
+    int arrived;             /* 1 once it has reached its destination           */
+    int signaled;            /* 1 once we've already kill()+waitpid()'d it,
+                              * so we don't try to reap/kill it twice           */
 
-    int currentNode;
-    int nextNode;
-    int finished;
-    int started;
+    /* --- the two pipes connecting parent and this child --- */
+    int pipeFd[2];           /* data pipe   child -> parent ([0]=read,[1]=write)*/
+    int controlPipe[2];      /* control pipe parent -> child ([0]=read,[1]=write)*/
 
-    int drawFromNode;
-    int drawToNode;
-    double moveStartTime;
-    int moving;
-    double pausedProgress;
-    double edgeDuration;
+    /* --- logical position / status (updated from child messages) --- */
+    int currentNode;         /* node it is at right now                         */
+    int nextNode;            /* node it is heading to                           */
+    int finished;            /* 1 when MSG_FINISHED was received                */
+    int started;             /* 1 after Play sent it the SIGUSR1 start signal   */
 
-    int waitingForNode;
-    int insideNode;
-    int waitFromNode;
+    /* --- animation state (purely for smooth on-screen movement) --- */
+    int drawFromNode;        /* edge endpoint the dot is moving FROM            */
+    int drawToNode;          /* edge endpoint the dot is moving TO              */
+    double moveStartTime;    /* GetTime() when this edge crossing began         */
+    int moving;              /* 1 while the dot is sliding along an edge         */
+    double pausedProgress;   /* saved progress (seconds) while paused           */
+    double edgeDuration;     /* total seconds this edge crossing should take    */
+
+    /* --- finer status flags used for color + placement --- */
+    int waitingForNode;      /* 1 while queued, waiting for entry permission    */
+    int insideNode;          /* 1 while sitting inside a node                   */
+    int waitFromNode;        /* the node it is waiting just outside of          */
 } Traveler;
 
 /* ===== helpers ===== */
@@ -172,22 +237,27 @@ static void enqueueTraveler(NodeQueue *nodeQueues, const WaitingTraveler *wt) {
     nodeQueues[node].queueSize++;
 }
 
-/* Choose the next traveler index to dispatch according to FCFS or SJF policy. */
+/* Choose the next traveler index to dispatch according to FCFS or SJF policy.
+ * Returns an index INTO nodeQueues[node].queue (not a traveler index), or -1.
+ * FCFS: pick the smallest arrivalOrder (whoever asked earliest).
+ * SJF : pick the smallest nextEdgeWeight; ties broken by earliest arrival. */
 static int pickNextTravelerIndex(const NodeQueue *nodeQueues, int node, SchedulerType scheduler) {
     if (node < 0 || node >= MAX_VERTICES) return -1;
     if (nodeQueues[node].queueSize <= 0) return -1;
 
-    int best = 0;
+    int best = 0;   /* assume the first waiter is best, then try to beat it */
 
     for (int i = 1; i < nodeQueues[node].queueSize; i++) {
-        const WaitingTraveler *cand = &nodeQueues[node].queue[i];
-        const WaitingTraveler *cur  = &nodeQueues[node].queue[best];
+        const WaitingTraveler *cand = &nodeQueues[node].queue[i];     /* candidate */
+        const WaitingTraveler *cur  = &nodeQueues[node].queue[best];  /* current best */
 
         if (scheduler == SCHED_FCFS) {
+            /* earlier arrival beats later arrival */
             if (cand->arrivalOrder < cur->arrivalOrder) {
                 best = i;
             }
         } else {
+            /* SJF: lighter next edge wins; equal weight -> earlier arrival wins */
             if (cand->nextEdgeWeight < cur->nextEdgeWeight) {
                 best = i;
             } else if (cand->nextEdgeWeight == cur->nextEdgeWeight &&
@@ -217,19 +287,28 @@ static WaitingTraveler removeWaitingTraveler(NodeQueue *nodeQueues, int node, in
     return removed;
 }
 
-/* Send one structured traveler status message from a child process to the parent. */
+/* === Pipe communication primitives (child <-> parent) ===
+ * Each message is a whole fixed-size struct, written/read in one shot so the
+ * two processes never disagree about where one message ends and the next begins. */
+
+/* CHILD -> PARENT: write one status message into the data pipe.
+ * Returns 1 on a full successful write, 0 otherwise. */
 static int sendTravelerMessage(int fd, const TravelerMessage *msg) {
     ssize_t n = write(fd, msg, sizeof(*msg));
     return (n == (ssize_t)sizeof(*msg));
 }
 
-/* Send a node-entry approval from the parent process to a child traveler. */
+/* PARENT -> CHILD: write the approved node number into the control pipe.
+ * This is how the parent says "you may now enter node X". */
 static int sendEnterApproval(int fd, int node) {
     ssize_t n = write(fd, &node, sizeof(node));
     return (n == (ssize_t)sizeof(node));
 }
 
-/* Block in the child until the parent approves entry to the expected node. */
+/* CHILD side: block on read() until the parent sends an approval.
+ * read() blocks the child here (the control pipe is NOT non-blocking),
+ * which is exactly how a traveler "waits its turn" at a node.
+ * Returns 1 only if the approved node equals the one we asked for. */
 static int waitForEnterApproval(int fd, int expectedNode) {
     int approvedNode = -1;
     ssize_t n = read(fd, &approvedNode, sizeof(approvedNode));
@@ -305,14 +384,18 @@ static void dispatchReadyNodes(NodeQueue *nodeQueues,
     }
 }
 
-/* Sleep for a floating-point number of seconds using nanosleep. */
+/* Sleep for a floating-point number of seconds using nanosleep.
+ * EVERY pause a child takes (sitting in a node, crossing an edge) goes through
+ * here, so this is the single place where "how long it slept" is spent.
+ * It splits the double into whole seconds (tv_sec) + nanoseconds (tv_nsec). */
 static void sleepSeconds(double seconds) {
     if (seconds <= 0.0) return;
 
     struct timespec ts;
-    ts.tv_sec = (time_t)seconds;
-    ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1e9);
+    ts.tv_sec = (time_t)seconds;                              /* whole seconds   */
+    ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1e9); /* leftover as ns  */
 
+    /* clamp the nanosecond field into the legal range [0, 999999999] */
     if (ts.tv_nsec < 0) ts.tv_nsec = 0;
     if (ts.tv_nsec >= 1000000000L) ts.tv_nsec = 999999999L;
 
@@ -346,14 +429,20 @@ static void resetTravelerState(Traveler *t) {
     t->waitFromNode = -1;
 }
 
-/* Stop a traveler process if needed and close every pipe file descriptor it owns. */
+/* Stop a traveler process if needed and close every pipe file descriptor it owns.
+ * THIS is the "forced death" path (Reset button, quit, error). It sends SIGTERM
+ * — whose default action terminates the child instantly, with no chance to print
+ * or clean up. The sample exam task asks you to change THIS behavior: send a
+ * different signal (SIGUSR1) and let the child report + exit on its own.
+ * `!t->signaled` guards against killing/reaping the same child twice. */
 static void cleanupTravelerProcess(Traveler *t) {
     if (t->pid > 0 && !t->signaled) {
-        kill(t->pid, SIGTERM);
-        waitpid(t->pid, NULL, 0);
+        kill(t->pid, SIGTERM);      /* <-- "the signal that kills it" */
+        waitpid(t->pid, NULL, 0);   /* reap the zombie so it fully disappears */
         t->signaled = 1;
     }
 
+    /* close all four pipe ends this traveler owns, guarding against double-close */
     if (t->pipeFd[0] >= 0) {
         close(t->pipeFd[0]);
         t->pipeFd[0] = -1;
@@ -374,7 +463,9 @@ static void cleanupTravelerProcess(Traveler *t) {
     t->pid = 0;
 }
 
-/* Reap a child process once the parent has marked that traveler as finished. */
+/* Reap a child that finished NATURALLY (it already sent MSG_FINISHED and called
+ * exit(0) on its own). We only waitpid() to clear the zombie entry; we do not
+ * signal it, because it is already exiting by itself. */
 static void reapFinishedTraveler(Traveler *t) {
     if (t->pid > 0 && t->finished && !t->signaled) {
         waitpid(t->pid, NULL, 0);
@@ -383,7 +474,15 @@ static void reapFinishedTraveler(Traveler *t) {
     }
 }
 
-/* Compute the start/end drawing points of an edge after applying node radius and edge offset. */
+/* ==========================================================================
+ *  GEOMETRY & DRAWING HELPERS
+ *  Pure presentation code: where to place nodes, how to draw edges, arrows,
+ *  weight labels, and node circles. None of this touches processes or signals.
+ * ========================================================================== */
+
+/* Compute the start/end drawing points of an edge after applying node radius and edge offset.
+ * Shifts each endpoint off the node's rim and sideways by EDGE_OFFSET so that
+ * the A->B arrow and the B->A arrow are drawn as two distinct parallel lines. */
 static void getEdgeEndpoints(VisGraph *vg, int from, int to,
                              Vector2 *start, Vector2 *end) {
     Vector2 p1 = vg->pos[from];
@@ -612,7 +711,16 @@ static Color travelerColor(int idx) {
     return palette[idx % n];
 }
 
-/* Read all pending child messages, update traveler state, and enqueue node requests. */
+/* Read all pending child messages, update traveler state, and enqueue node requests.
+ * Called once per frame by the parent. For each traveler it drains its data pipe
+ * in a while-loop until read() returns no full message (the pipe was set
+ * NON-BLOCKING in spawnTravelers, so read() returns immediately when empty
+ * instead of freezing the GUI). Each message type drives a small state update:
+ *   MSG_REQUEST_NODE -> put the traveler in that node's waiting queue
+ *   MSG_ENTERED_NODE -> mark it inside the node
+ *   MSG_LEAVING_NODE -> free the node, start the edge animation, wake the queue
+ *   MSG_FINISHED     -> mark done, free the node
+ * The printf lines are the milestone's required terminal log. */
 static void processTravelerMessages(Traveler *travelers,
                                     int numTravelers,
                                     const VisGraph *vg,
@@ -740,34 +848,58 @@ static void processTravelerMessages(Traveler *travelers,
     }
 }
 
-/* Minimal signal handler used only to wake children from pause() when Play is pressed. */
+/* ==========================================================================
+ *  PROCESSES, SIGNALS & CHILD LIFECYCLE
+ *  The core of the assignment: the signal handler, the child's main loop,
+ *  and the fork() routine that spawns one child per traveler.
+ *  >>> Sample exam tasks about signals almost always modify this section. <<<
+ * ========================================================================== */
+
+/* Minimal SIGUSR1 handler installed by each child.
+ * Its ONLY job is to exist so that pause() returns when the parent sends SIGUSR1
+ * (the "Play" signal). A handler that does nothing is enough to interrupt
+ * pause(); without an installed handler, SIGUSR1's default action would kill the
+ * child instead. NOTE for the exam: this is where you'd add logic if SIGUSR1
+ * must also trigger a graceful "report sleep time and exit". */
 static void startHandler(int sig) {
-    (void)sig;
+    (void)sig;   /* unused parameter; silence the compiler warning */
 }
 
-/* Child-process entry point: compute one path and report node transitions to the parent. */
+/* ============================ CHILD ENTRY POINT ============================
+ * Runs in each forked child. It NEVER returns — it always ends in exit().
+ * Parameters: graph file path, this traveler's index, src/dest vertices,
+ *   writeFd     = our end of the data pipe   (child -> parent)
+ *   approvalFd  = our end of the control pipe (parent -> child)
+ *
+ * Flow:
+ *   1. install SIGUSR1 handler, then pause() -> freeze until Play
+ *   2. load the graph and run Dijkstra to get our own path
+ *   3. walk the path node by node: request -> wait approval -> enter ->
+ *      sleep in node -> announce leaving -> sleep across edge
+ *   4. send MSG_FINISHED and exit(0)
+ * ========================================================================== */
 static void childMain(const char *filename, int travelerIndex,
                       int src, int dest, int writeFd, int approvalFd) {
     FILE *fp = NULL;
     Graph *g;
 
-    signal(SIGUSR1, startHandler);
-    pause();
+    signal(SIGUSR1, startHandler); /* arm the start signal so pause() can be woken */
+    pause();                       /* sleep here until parent sends SIGUSR1 (Play) */
 
-    g = loadGraphOnly(filename, &fp);
+    g = loadGraphOnly(filename, &fp);   /* each child loads its own copy of the graph */
     if (fp != NULL) {
         fclose(fp);
     }
 
-    if (g == NULL) {
+    if (g == NULL) {                /* graph failed to load -> bail out */
         close(writeFd);
         close(approvalFd);
         exit(1);
     }
 
-    DijkstraResult result = dijkstra(g, src, dest);
+    DijkstraResult result = dijkstra(g, src, dest);  /* compute our shortest path */
 
-    if (!result.found || result.pathLength <= 0) {
+    if (!result.found || result.pathLength <= 0) {   /* no path exists -> report done */
         TravelerMessage msg = {
             .type = MSG_FINISHED,
             .pid = getpid(),
@@ -786,17 +918,19 @@ static void childMain(const char *filename, int travelerIndex,
         exit(0);
     }
 
+    /* Walk the shortest path one vertex at a time. */
     for (int i = 0; i < result.pathLength; i++) {
-        int current = result.path[i];
-        int next = (i < result.pathLength - 1) ? result.path[i + 1] : -1;
-        int isDest = (i == result.pathLength - 1);
+        int current = result.path[i];                               /* node we're at      */
+        int next = (i < result.pathLength - 1) ? result.path[i + 1] : -1; /* node after    */
+        int isDest = (i == result.pathLength - 1);                  /* last node?         */
         int nextWeight = 0;
 
         if (!isDest) {
-            nextWeight = getPathEdgeWeight(g, current, next);
+            nextWeight = getPathEdgeWeight(g, current, next);        /* cost of next edge  */
             if (nextWeight <= 0) nextWeight = 1;
         }
 
+        /* (1) ASK the parent for permission to enter `current`. */
         TravelerMessage req = {
             .type = MSG_REQUEST_NODE,
             .pid = getpid(),
@@ -808,6 +942,7 @@ static void childMain(const char *filename, int travelerIndex,
         };
         sendTravelerMessage(writeFd, &req);
 
+        /* (2) BLOCK until the parent approves entry to this exact node. */
         if (!waitForEnterApproval(approvalFd, current)) {
             freeDijkstraResult(&result);
             freeGraph(g);
@@ -816,6 +951,7 @@ static void childMain(const char *filename, int travelerIndex,
             exit(1);
         }
 
+        /* (3) Tell the parent we are now inside the node. */
         TravelerMessage entered = {
             .type = MSG_ENTERED_NODE,
             .pid = getpid(),
@@ -827,9 +963,10 @@ static void childMain(const char *filename, int travelerIndex,
         };
         sendTravelerMessage(writeFd, &entered);
 
-        sleepSeconds(NODE_STAY_SECONDS);
+        sleepSeconds(NODE_STAY_SECONDS);   /* <-- SLEEP #1: dwell time inside the node */
 
         if (!isDest) {
+            /* (4) Announce we are leaving toward `next`. */
             TravelerMessage leaving = {
                 .type = MSG_LEAVING_NODE,
                 .pid = getpid(),
@@ -841,12 +978,14 @@ static void childMain(const char *filename, int travelerIndex,
             };
             sendTravelerMessage(writeFd, &leaving);
 
+            /* (5) SLEEP #2: time spent crossing the edge, proportional to weight. */
             double duration = nextWeight * SECONDS_PER_WEIGHT;
             if (duration < MIN_EDGE_DURATION) duration = MIN_EDGE_DURATION;
             sleepSeconds(duration);
         }
     }
 
+    /* Reached the destination: report FINISHED, free everything, exit cleanly. */
     TravelerMessage finished = {
         .type = MSG_FINISHED,
         .pid = getpid(),
@@ -865,24 +1004,28 @@ static void childMain(const char *filename, int travelerIndex,
     exit(0);
 }
 
-/* Create pipes and fork one child process for each traveler in the simulation. */
+/* Create pipes and fork one child process for each traveler in the simulation.
+ * Done in TWO passes: first create every pipe, then fork every child. Returns
+ * 1 on success, 0 if any pipe()/fork() failed. */
 static int spawnTravelers(Traveler *travelers, int numTravelers, const char *filename) {
+    /* Pass 1: create both pipes for every traveler BEFORE any fork. */
     for (int i = 0; i < numTravelers; i++) {
         resetTravelerState(&travelers[i]);
 
-        if (pipe(travelers[i].pipeFd) < 0) {
+        if (pipe(travelers[i].pipeFd) < 0) {       /* data pipe  child -> parent */
             perror("pipe");
             return 0;
         }
 
-        if (pipe(travelers[i].controlPipe) < 0) {
+        if (pipe(travelers[i].controlPipe) < 0) {  /* control pipe parent -> child */
             perror("pipe");
             return 0;
         }
     }
 
-    fflush(stdout);
+    fflush(stdout);  /* flush before fork so buffered text isn't duplicated by children */
 
+    /* Pass 2: fork one child per traveler. */
     for (int i = 0; i < numTravelers; i++) {
         pid_t pid = fork();
         if (pid < 0) {
@@ -891,25 +1034,34 @@ static int spawnTravelers(Traveler *travelers, int numTravelers, const char *fil
         }
 
         if (pid == 0) {
+            /* ---- CHILD branch (fork returned 0) ---- */
+            /* Close the ends the child does NOT use:
+             *   - read end of its data pipe (child only writes to parent)
+             *   - write end of its control pipe (child only reads approvals)  */
             close(travelers[i].pipeFd[0]);
             close(travelers[i].controlPipe[1]);
 
+            /* Hand over to the child loop; childMain never returns. */
             childMain(filename,
                       i,
                       travelers[i].src,
                       travelers[i].dest,
-                      travelers[i].pipeFd[1],
-                      travelers[i].controlPipe[0]);
+                      travelers[i].pipeFd[1],      /* child writes here */
+                      travelers[i].controlPipe[0]);/* child reads here  */
         }
 
+        /* ---- PARENT branch (fork returned the child's pid) ---- */
         travelers[i].pid = pid;
 
+        /* Parent closes the ends IT does not use (the child's ends). */
         close(travelers[i].pipeFd[1]);
         travelers[i].pipeFd[1] = -1;
 
         close(travelers[i].controlPipe[0]);
         travelers[i].controlPipe[0] = -1;
 
+        /* Make the parent's read end NON-BLOCKING, so reading an empty pipe
+         * returns immediately instead of freezing the 60-FPS render loop. */
         int flags = fcntl(travelers[i].pipeFd[0], F_GETFL, 0);
         if (flags >= 0) {
             fcntl(travelers[i].pipeFd[0], F_SETFL, flags | O_NONBLOCK);
@@ -920,6 +1072,18 @@ static int spawnTravelers(Traveler *travelers, int numTravelers, const char *fil
 }
 
 /* Main GUI entry point: load the graph, spawn travelers, run scheduling, and draw everything. */
+/* ========================= PARENT / GUI ENTRY POINT =========================
+ * The top-level function called from main(). It:
+ *   1. loads the graph and reads the traveler list from the file
+ *   2. runs Dijkstra for each traveler, then spawnTravelers() forks the children
+ *   3. opens the window and enters the 60-FPS loop, where each frame it:
+ *        - drains child messages (processTravelerMessages)
+ *        - runs the scheduler (dispatchReadyNodes)
+ *        - reaps finished children
+ *        - handles Play/Pause/Reset clicks (sends SIGUSR1/SIGSTOP/SIGCONT)
+ *        - draws the graph, travelers, and side panel
+ *   4. on exit, kills/reaps every child and frees memory
+ * ========================================================================== */
 void runGraphVisualizer(const char *filename, SchedulerType scheduler) {
     const int W = 900;
     const int H = 700;
@@ -1015,13 +1179,15 @@ void runGraphVisualizer(const char *filename, SchedulerType scheduler) {
     }
 
     InitWindow(W, H, "Graph Visualizer - Milestone 7");
-    SetTargetFPS(60);
-    computeLayout(&vg, W, H);
+    SetTargetFPS(60);                       /* run the loop ~60 times per second */
+    computeLayout(&vg, W, H);               /* place nodes in a circle           */
     Font font = GetFontDefault();
 
+    /* ---- MAIN LOOP: runs once per frame until the window is closed ---- */
     while (!WindowShouldClose()) {
-        double now = GetTime();
+        double now = GetTime();             /* seconds since the window opened   */
 
+        /* 1) read everything the children have told us since last frame */
         processTravelerMessages(travelers,
                                 numTravelers,
                                 &vg,
@@ -1082,6 +1248,7 @@ void runGraphVisualizer(const char *filename, SchedulerType scheduler) {
             Vector2 mouse = GetMousePosition();
 
             if (CheckCollisionPointRec(mouse, playButton)) {
+                /* Figure out if travelers are already running (Play vs Pause/Resume). */
                 int anyStarted = 0;
                 for (int i = 0; i < numTravelers; i++) {
                     if (travelers[i].started && !travelers[i].finished) {
@@ -1091,21 +1258,24 @@ void runGraphVisualizer(const char *filename, SchedulerType scheduler) {
                 }
 
                 if (!anyStarted) {
+                    /* FIRST PLAY: wake every child out of pause() with SIGUSR1. */
                     for (int i = 0; i < numTravelers; i++) {
                         Traveler *t = &travelers[i];
                         if (!t->started && t->pid > 0) {
-                            kill(t->pid, SIGUSR1);
+                            kill(t->pid, SIGUSR1);   /* the "start" signal */
                             t->started = 1;
                         }
                     }
                     isPaused = 0;
                 } else if (!isPaused) {
+                    /* PAUSE: freeze each running child with SIGSTOP. */
                     for (int i = 0; i < numTravelers; i++) {
                         Traveler *t = &travelers[i];
                         if (t->started && !t->finished && t->pid > 0) {
-                            kill(t->pid, SIGSTOP);
+                            kill(t->pid, SIGSTOP);   /* freeze the process */
                         }
                         if (t->moving) {
+                            /* remember how far along the edge animation was */
                             double elapsed = GetTime() - t->moveStartTime;
                             double duration = t->edgeDuration;
                             if (duration <= 0.0) duration = 1.0;
@@ -1116,12 +1286,14 @@ void runGraphVisualizer(const char *filename, SchedulerType scheduler) {
                     }
                     isPaused = 1;
                 } else {
+                    /* RESUME: unfreeze each child with SIGCONT. */
                     for (int i = 0; i < numTravelers; i++) {
                         Traveler *t = &travelers[i];
                         if (t->started && !t->finished && t->pid > 0) {
-                            kill(t->pid, SIGCONT);
+                            kill(t->pid, SIGCONT);   /* resume the process */
                         }
                         if (t->moving) {
+                            /* rebase the animation clock so motion continues smoothly */
                             t->moveStartTime = GetTime() - t->pausedProgress;
                         }
                     }
@@ -1130,6 +1302,8 @@ void runGraphVisualizer(const char *filename, SchedulerType scheduler) {
             }
 
             if (CheckCollisionPointRec(mouse, resetButton)) {
+                /* RESET: kill all current children (SIGTERM via cleanup), wipe
+                 * their state, then re-fork a fresh batch and clear the queues. */
                 for (int i = 0; i < numTravelers; i++) {
                     cleanupTravelerProcess(&travelers[i]);
                     resetTravelerState(&travelers[i]);
@@ -1316,6 +1490,8 @@ void runGraphVisualizer(const char *filename, SchedulerType scheduler) {
 
     CloseWindow();
 
+    /* Shutdown: kill+reap every child (SIGTERM via cleanup) and free all memory,
+     * so no orphaned child processes or leaks are left behind. */
     for (int i = 0; i < numTravelers; i++) {
         cleanupTravelerProcess(&travelers[i]);
         freeDijkstraResult(&travelers[i].result);

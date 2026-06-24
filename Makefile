@@ -93,11 +93,30 @@ $(RAYLIB_LIB):
 # Only installs when the headers are actually missing, and only on Linux.
 ensure-system-deps:
 ifeq ($(UNAME_S),Linux)
-	@if [ ! -f /usr/include/GL/gl.h ] || [ ! -f /usr/include/X11/Xlib.h ]; then \
-		echo ">> X11/OpenGL dev headers missing — installing them (needs sudo)..."; \
+	@if [ -f /usr/include/GL/gl.h ] && [ -f /usr/include/X11/Xlib.h ]; then \
+		echo ">> System dev headers present."; \
+	elif sudo -n true 2>/dev/null; then \
+		echo ">> Installing X11/OpenGL dev headers (sudo available, no prompt needed)..."; \
+		$(MAKE) --no-print-directory system-deps; \
+	elif [ -t 0 ]; then \
+		echo ">> X11/OpenGL dev headers missing — installing them (sudo will ask for your password)..."; \
 		$(MAKE) --no-print-directory system-deps; \
 	else \
-		echo ">> System dev headers present."; \
+		echo ""; \
+		echo "!! ----------------------------------------------------------------"; \
+		echo "!! X11 / OpenGL development headers are not installed yet."; \
+		echo "!! They must be installed once with sudo, which cannot be done"; \
+		echo "!! from an IDE build runner (no terminal to type the password)."; \
+		echo "!!"; \
+		echo "!! Open a normal terminal and run this ONCE:"; \
+		echo "!!"; \
+		echo "!!     cd $(CURDIR)"; \
+		echo "!!     make system-deps"; \
+		echo "!!"; \
+		echo "!! Then build again here. This is a one-time step."; \
+		echo "!! ----------------------------------------------------------------"; \
+		echo ""; \
+		exit 1; \
 	fi
 else
 	@true
@@ -108,7 +127,8 @@ system-deps:
 	@case "$(UNAME_S)" in \
 	  Linux) \
 	    if command -v apt-get >/dev/null 2>&1; then \
-	      sudo apt-get update && sudo apt-get install -y build-essential git \
+	      sudo apt-get update || true; \
+	      sudo apt-get install -y build-essential git \
 	        libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
 	        libgl1-mesa-dev libglu1-mesa-dev ; \
 	    elif command -v dnf >/dev/null 2>&1; then \

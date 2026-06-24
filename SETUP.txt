@@ -96,3 +96,25 @@ make clean
 make milestone7 HAVE_SYS_RAYLIB=yes \
 RAYLIB_CFLAGS="-I/usr/local/include" \
 RAYLIB_LIBS="-L/usr/local/lib -lraylib -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXi -lXcursor -lXinerama -lGL"
+
+=============================================
+
+1. להיכנס לVMware
+2. ⁠ללחוץ open a virtual machine
+3. ⁠ לחפש את הנתיב הבא this pc/ windows c/ program files/virtual machines/unbunto/ללחוץ על הקובץ מסוג v.mx ולעשות open
+4. ⁠ללחוץ power on
+5. ⁠עכשיו אנחנו בתוך הלינוקס נכנס לclion
+6. ⁠עכשיו ניכנס לחשבון נעשה activate license ואז continue with email נרשום את האימייל של המכללה ואת הסיסמא לjet brains  לאחר מכן נעשה active
+7. ⁠נלחץ clone repository נכנס מהכרום רגע לגיטהאב נכנסים לפרויקט שלנו לוחצים על code ומעתיקים את הקישור שיש שם לתוך הclion ונכנס לפרויקט שלנו
+8. ⁠זה מבקש סיסמא לאחר מכן אז נרשום password
+9. ⁠בשלב זה הפרויקט אמור להופיע לנו עם כל התיקיות שלו בclion
+10. ⁠נכנסים לקונסול ומעתיקים מהקובץ setuptext (של אלי) את השורה שמתחילה בsudo (חשוב למחוק את הטילדה)
+11. ⁠הוא יבקש סיסמא נרשום password
+12. ⁠נצא מהקונסול נלך לטרמינל ונרשום make milestone 7
+13. ⁠13 עכשיו נבדוק שהפרויקט רץ נשתמש בפקודות הבאות בטרמינל ולהריץ את השורה הראשונה בשלב 6 בקובץ setuptext
+14. ⁠בשלב זה אנחנו אמורים לראות את האנימציה שלנו  ועכשיו נרצה ליצור ענף נריץ את שלושת הפקודות הבאות בטרמינל  git check out master   git pull    git checkout -b-exam_a/213709009
+15. ⁠לאחר שיצרנו ענף ניתן להתחיל לעבוד ולשנות מה שהתבקשנו בפרויקט
+16. ⁠לאחר ששינינו הכל כנדרש  נרצה לשמור את זה ולכן נבצע את הפקודות הבאות
+git add .
+git commit -m “what we did”
+git push -u origin exam_a/213709009

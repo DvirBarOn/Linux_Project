@@ -89,3 +89,10 @@ Then open the repo on GitHub and confirm your commit is really there.
 Reminder of the grade split: 35% right place | 30% logical code |
 20% working commit | 15% honest peer review. Locate first, commit early.
 ==============================================================================
+
+algorithm dvir :
+
+make clean
+make milestone7 HAVE_SYS_RAYLIB=yes \
+RAYLIB_CFLAGS="-I/usr/local/include" \
+RAYLIB_LIBS="-L/usr/local/lib -lraylib -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXi -lXcursor -lXinerama -lGL"

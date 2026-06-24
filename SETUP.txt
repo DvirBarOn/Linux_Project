@@ -1,108 +1,98 @@
-CC      := gcc
-CFLAGS  := -Wall -Wextra -O2 -std=c11
-UNAME_S := $(shell uname -s)
+==============================================================================
+ Linux_Project — SETUP & RUN CHECKLIST
+==============================================================================
+==============================================================================
+ THE ORDER — DO THESE TOP TO BOTTOM
+==============================================================================
 
-# raylib's own dependencies — needed when linking the STATIC libraylib, and
-# harmless when linking the shared one. Always appended after -lraylib.
-ifeq ($(UNAME_S),Darwin)
-    PLATFORM_LIBS := -lm -lpthread -framework CoreVideo -framework IOKit -framework Cocoa -framework GLUT -framework OpenGL
-else
-    PLATFORM_LIBS := -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXi -lXcursor -lXinerama -lGL
-endif
+ONE-TIME SETUP (once per computer / VM)
+---------------------------------------
+1. Open the Terminal app.
 
-RAYLIB_VERSION := 5.0
-RAYLIB_DIR     := external/raylib
-RAYLIB_SRC     := $(RAYLIB_DIR)/src
-RAYLIB_LIB     := $(RAYLIB_SRC)/libraylib.a
+2. Install the system libraries:
+       sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev \
+           libxcursor-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev
 
-# --- raylib detection, in priority order ---
-# 1) pkg-config (a proper system install)
-HAVE_PC := $(shell pkg-config --exists raylib 2>/dev/null && echo yes)
-# 2) a from-source install (header + lib) under a common prefix, e.g. /usr/local
-RAYLIB_PREFIX := $(shell for p in /usr/local /usr /opt/homebrew $(HOME)/.local; do \
-    if [ -f "$$p/include/raylib.h" ] && ls "$$p"/lib/libraylib.* >/dev/null 2>&1; then echo "$$p"; break; fi; \
-  done)
+3. (Check it worked)
+       ls /usr/include/GL/gl.h /usr/include/X11/Xlib.h
 
-ifeq ($(HAVE_PC),yes)
-    # ----- system raylib via pkg-config -----
-    RAYLIB_CFLAGS := $(shell pkg-config --cflags raylib)
-    RAYLIB_LIBS   := $(shell pkg-config --libs raylib) $(PLATFORM_LIBS)
-    RAYLIB_DEP    :=
-    RAYLIB_VIA    := pkg-config
-else ifneq ($(RAYLIB_PREFIX),)
-    # ----- system raylib found by path (no pkg-config, e.g. /usr/local) -----
-    RAYLIB_CFLAGS := -I$(RAYLIB_PREFIX)/include
-    RAYLIB_DEP    :=
-    RAYLIB_VIA    := $(RAYLIB_PREFIX)
-    ifeq ($(UNAME_S),Darwin)
-        RAYLIB_LIBS := -L$(RAYLIB_PREFIX)/lib -Wl,-rpath,$(RAYLIB_PREFIX)/lib -lraylib $(PLATFORM_LIBS)
-    else
-        RAYLIB_LIBS := -L$(RAYLIB_PREFIX)/lib -Wl,-rpath,$(RAYLIB_PREFIX)/lib -lraylib $(PLATFORM_LIBS)
-    endif
-else
-    # ----- no system raylib: build it locally into external/ -----
-    RAYLIB_CFLAGS := -I$(RAYLIB_SRC)
-    RAYLIB_DEP    := $(RAYLIB_LIB)
-    RAYLIB_VIA    := local-build
-    ifeq ($(UNAME_S),Darwin)
-        RAYLIB_LIBS := $(RAYLIB_LIB) $(PLATFORM_LIBS)
-    else
-        RAYLIB_LIBS := $(RAYLIB_LIB) $(PLATFORM_LIBS)
-    endif
-endif
+BUILD & RUN (every time after that)
+-----------------------------------
+4. Go to the project folder (adjust the path to yours):
+       cd ~/CLionProjects/Linux_Project
 
-raylib-info:
-	@echo "raylib source : $(RAYLIB_VIA)"
-	@echo "CFLAGS        : $(RAYLIB_CFLAGS)"
-	@echo "LIBS          : $(RAYLIB_LIBS)"
+5. Build the full GUI simulator.
+      make milestone7
 
-all: milestone1 milestone7
-milestone1: dijkstra
-dijkstra: Dijkstra.c Dijkstra_main.c Dijkstra.h
-	$(CC) $(CFLAGS) Dijkstra.c Dijkstra_main.c -o dijkstra
-milestone2: sim
-milestone3: sim
-milestone5: sim
-milestone6: sim
-milestone7: sim
-sim: Dijkstra.c GraphVisual.c main.c Dijkstra.h $(RAYLIB_DEP)
-	$(CC) $(CFLAGS) $(RAYLIB_CFLAGS) Dijkstra.c GraphVisual.c main.c -o sim $(RAYLIB_LIBS)
-milestone4: sim4
-sim4: Dijkstra.c GraphVisual.c main.c Dijkstra.h $(RAYLIB_DEP)
-	$(CC) $(CFLAGS) $(RAYLIB_CFLAGS) Dijkstra.c GraphVisual.c main.c -o sim4 $(RAYLIB_LIBS)
+6. Run it:
+       ./sim -schd fcfs Graph.txt        (First-Come-First-Served)
+   or  ./sim -schd sjf  Graph.txt        (Shortest-Job-First)
 
-$(RAYLIB_LIB):
-	@echo ">> Provisioning raylib $(RAYLIB_VERSION) locally..."
-	@$(MAKE) --no-print-directory check-headers
-	@if [ ! -f "$(RAYLIB_SRC)/Makefile" ]; then \
-		git clone --depth 1 --branch $(RAYLIB_VERSION) https://github.com/raysan5/raylib.git $(RAYLIB_DIR); \
-	fi
-	$(MAKE) -C $(RAYLIB_SRC) PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC
-	@echo ">> raylib ready."
+   In the window, click PLAY to start the travelers.
 
-check-headers:
-ifeq ($(UNAME_S),Linux)
-	@if [ -f /usr/include/GL/gl.h ] && [ -f /usr/include/X11/Xlib.h ]; then \
-		echo ">> System dev headers present."; \
-	else echo "!! X11/OpenGL headers missing. Run: make system-deps"; exit 1; fi
-else
-	@true
-endif
+OTHER BUILD TARGETS (optional)
+------------------------------
+   make milestone1 && ./dijkstra Graph.txt    -> terminal Dijkstra (no raylib)
+   make milestone4 && ./sim4 Graph.txt        -> multi-traveler version
+   make clean                                 -> delete the binaries
+   make distclean                             -> also delete downloaded raylib
+   make setup                                 -> system-deps + prebuild raylib
 
-system-deps:
-	@if command -v apt-get >/dev/null 2>&1; then \
-	  PKG='apt-get update || true; apt-get install -y build-essential git libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev'; \
-	else echo "Install X11+GL dev libs manually."; exit 1; fi; \
-	if [ "$$(id -u)" = "0" ]; then sh -c "$$PKG"; \
-	elif [ -t 0 ] && command -v sudo >/dev/null 2>&1; then sudo sh -c "$$PKG"; \
-	elif command -v pkexec >/dev/null 2>&1 && [ -n "$$DISPLAY" ]; then pkexec sh -c "$$PKG"; \
-	elif command -v sudo >/dev/null 2>&1; then sudo sh -c "$$PKG"; \
-	else echo "Need root. Run: sudo sh -c \"$$PKG\""; exit 1; fi
+==============================================================================
+ IF SOMETHING GOES WRONG
+==============================================================================
 
-setup: system-deps
-	@$(MAKE) --no-print-directory $(RAYLIB_LIB)
-clean:
-	rm -f dijkstra sim sim4 *.o
-distclean: clean
-	rm -rf external
-.PHONY: all milestone1 milestone2 milestone3 milestone4 milestone5 milestone6 milestone7 clean distclean setup system-deps check-headers raylib-info
+* "X11 / OpenGL development headers are not installed yet"
+      You skipped step 2. Run it in a terminal, then build again.
+
+* "sudo: a terminal is required to read the password"
+      You launched the install from CLion. Use the Terminal app instead,
+      or run `make system-deps` (it opens a graphical password box).
+
+* "warning: overriding recipe for target 'sim'"
+      Your Makefile has duplicated content (pasted twice). Replace it with the
+      clean version. Verify with:   grep -c "^sim:" Makefile   -> must print 1
+
+* Window opens but nothing moves
+      Click the PLAY button. The traveler processes wait for the start signal.
+
+* "Could not find graph file"
+      Run from the repo root and pass the file:  ./sim -schd fcfs Graph.txt
+
+* `git checkout main` fails
+      The branch is called master, not main:   git checkout master
+
+==============================================================================
+ EXAM DAY — GIT WORKFLOW
+==============================================================================
+Replace "a" with the task letter on your exam paper, and [ID] with your ID.
+
+At the START (make your own branch so you don't touch the shared code):
+       git checkout master
+       git pull
+       git checkout -b exam_a/[ID]
+
+Do your change -> build -> test. Commit EARLY even if unfinished.
+
+At the END (everyone runs this, even if the code doesn't fully run):
+       git add .
+       git commit -m "exam_a: <what you did> -- stages 1,2,3"
+       git push origin exam_a/[ID]
+
+In the commit message note which stages you reached:
+       1 = found the right place in the code
+       2 = wrote logical code for the change
+       3 = code that actually compiles and runs
+
+Then open the repo on GitHub and confirm your commit is really there.
+
+Reminder of the grade split: 35% right place | 30% logical code |
+20% working commit | 15% honest peer review. Locate first, commit early.
+==============================================================================
+
+algorithm dvir :
+
+make clean
+make milestone7 HAVE_SYS_RAYLIB=yes \
+RAYLIB_CFLAGS="-I/usr/local/include" \
+RAYLIB_LIBS="-L/usr/local/lib -lraylib -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXi -lXcursor -lXinerama -lGL"

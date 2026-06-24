@@ -2,6 +2,14 @@ CC      := gcc
 CFLAGS  := -Wall -Wextra -O2 -std=c11
 UNAME_S := $(shell uname -s)
 
+# raylib's own dependencies — needed when linking the STATIC libraylib, and
+# harmless when linking the shared one. Always appended after -lraylib.
+ifeq ($(UNAME_S),Darwin)
+    PLATFORM_LIBS := -lm -lpthread -framework CoreVideo -framework IOKit -framework Cocoa -framework GLUT -framework OpenGL
+else
+    PLATFORM_LIBS := -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXi -lXcursor -lXinerama -lGL
+endif
+
 RAYLIB_VERSION := 5.0
 RAYLIB_DIR     := external/raylib
 RAYLIB_SRC     := $(RAYLIB_DIR)/src
@@ -18,7 +26,7 @@ RAYLIB_PREFIX := $(shell for p in /usr/local /usr /opt/homebrew $(HOME)/.local; 
 ifeq ($(HAVE_PC),yes)
     # ----- system raylib via pkg-config -----
     RAYLIB_CFLAGS := $(shell pkg-config --cflags raylib)
-    RAYLIB_LIBS   := $(shell pkg-config --libs raylib) -lm
+    RAYLIB_LIBS   := $(shell pkg-config --libs raylib) $(PLATFORM_LIBS)
     RAYLIB_DEP    :=
     RAYLIB_VIA    := pkg-config
 else ifneq ($(RAYLIB_PREFIX),)
@@ -27,11 +35,9 @@ else ifneq ($(RAYLIB_PREFIX),)
     RAYLIB_DEP    :=
     RAYLIB_VIA    := $(RAYLIB_PREFIX)
     ifeq ($(UNAME_S),Darwin)
-        RAYLIB_LIBS := -L$(RAYLIB_PREFIX)/lib -lraylib -lm -lpthread \
-                       -framework CoreVideo -framework IOKit -framework Cocoa -framework GLUT -framework OpenGL
+        RAYLIB_LIBS := -L$(RAYLIB_PREFIX)/lib -Wl,-rpath,$(RAYLIB_PREFIX)/lib -lraylib $(PLATFORM_LIBS)
     else
-        RAYLIB_LIBS := -L$(RAYLIB_PREFIX)/lib -Wl,-rpath,$(RAYLIB_PREFIX)/lib -lraylib \
-                       -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXi -lXcursor -lXinerama -lGL
+        RAYLIB_LIBS := -L$(RAYLIB_PREFIX)/lib -Wl,-rpath,$(RAYLIB_PREFIX)/lib -lraylib $(PLATFORM_LIBS)
     endif
 else
     # ----- no system raylib: build it locally into external/ -----
@@ -39,11 +45,9 @@ else
     RAYLIB_DEP    := $(RAYLIB_LIB)
     RAYLIB_VIA    := local-build
     ifeq ($(UNAME_S),Darwin)
-        RAYLIB_LIBS := $(RAYLIB_LIB) -lm -lpthread \
-                       -framework CoreVideo -framework IOKit -framework Cocoa -framework GLUT -framework OpenGL
+        RAYLIB_LIBS := $(RAYLIB_LIB) $(PLATFORM_LIBS)
     else
-        RAYLIB_LIBS := $(RAYLIB_LIB) -lm -lpthread -ldl -lrt \
-                       -lX11 -lXrandr -lXi -lXcursor -lXinerama -lGL
+        RAYLIB_LIBS := $(RAYLIB_LIB) $(PLATFORM_LIBS)
     endif
 endif
 

@@ -1,0 +1,116 @@
+==============================================================================
+ Linux_Project — SETUP & RUN CHECKLIST
+==============================================================================
+
+THE ONE LINE YOU NEED FIRST
+---------------------------
+Install the X11/OpenGL libraries that raylib needs (one time per machine):
+
+    sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev \
+        libxcursor-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev
+
+WHERE to run it:
+  -> In the real TERMINAL app (Ubuntu's "Terminal"), NOT CLion's build window.
+     It needs your password, and CLion's build runner can't ask for one.
+  -> Equivalent shortcut: from the project folder run  `make system-deps`
+     (in a terminal it prompts for the password; launched from CLion it pops
+      a graphical password dialog).
+
+You only do this ONCE. After it, everything (including CLion) builds with no
+sudo and no prompts.
+
+
+==============================================================================
+ THE ORDER — DO THESE TOP TO BOTTOM
+==============================================================================
+
+ONE-TIME SETUP (once per computer / VM)
+---------------------------------------
+1. Open the Terminal app.
+
+2. Install the system libraries (the line above):
+       sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev \
+           libxcursor-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev
+
+3. (Check it worked — both paths should print, no error:)
+       ls /usr/include/GL/gl.h /usr/include/X11/Xlib.h
+
+
+BUILD & RUN (every time after that)
+-----------------------------------
+4. Go to the project folder (adjust the path to yours):
+       cd ~/CLionProjects/Linux_Project
+
+5. Build the full GUI simulator.
+   The FIRST build also downloads and compiles raylib (~1-2 min). After that
+   it is cached, so later builds take a couple seconds.
+       make milestone7
+
+6. Run it:
+       ./sim -schd fcfs Graph.txt        (First-Come-First-Served)
+   or  ./sim -schd sjf  Graph.txt        (Shortest-Job-First)
+
+   In the window, click PLAY to start the travelers.
+
+
+OTHER BUILD TARGETS (optional)
+------------------------------
+   make milestone1 && ./dijkstra Graph.txt    -> terminal Dijkstra (no raylib)
+   make milestone4 && ./sim4 Graph.txt        -> multi-traveler version
+   make clean                                 -> delete the binaries
+   make distclean                             -> also delete downloaded raylib
+   make setup                                 -> system-deps + prebuild raylib
+
+
+==============================================================================
+ IF SOMETHING GOES WRONG
+==============================================================================
+
+* "X11 / OpenGL development headers are not installed yet"
+      You skipped step 2. Run it in a terminal, then build again.
+
+* "sudo: a terminal is required to read the password"
+      You launched the install from CLion. Use the Terminal app instead,
+      or run `make system-deps` (it opens a graphical password box).
+
+* "warning: overriding recipe for target 'sim'"
+      Your Makefile has duplicated content (pasted twice). Replace it with the
+      clean version. Verify with:   grep -c "^sim:" Makefile   -> must print 1
+
+* Window opens but nothing moves
+      Click the PLAY button. The traveler processes wait for the start signal.
+
+* "Could not find graph file"
+      Run from the repo root and pass the file:  ./sim -schd fcfs Graph.txt
+
+* `git checkout main` fails
+      The branch is called master, not main:   git checkout master
+
+
+==============================================================================
+ EXAM DAY — GIT WORKFLOW
+==============================================================================
+Replace "a" with the task letter on your exam paper, and [ID] with your ID.
+
+At the START (make your own branch so you don't touch the shared code):
+       git checkout master
+       git pull
+       git checkout -b exam_a/[ID]
+
+Do your change -> build -> test. Commit EARLY even if unfinished.
+
+At the END (everyone runs this, even if the code doesn't fully run):
+       git add .
+       git commit -m "exam_a: <what you did> -- stages 1,2,3"
+       git push origin exam_a/[ID]
+
+In the commit message note which stages you reached:
+       1 = found the right place in the code
+       2 = wrote logical code for the change
+       3 = code that actually compiles and runs
+
+Then open the repo on GitHub and confirm your commit is really there.
+
+Reminder of the grade split: 35% right place | 30% logical code |
+20% working commit | 15% honest peer review. Locate first, commit early.
+==============================================================================

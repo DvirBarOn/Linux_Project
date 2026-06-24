@@ -1,25 +1,6 @@
 ==============================================================================
  Linux_Project — SETUP & RUN CHECKLIST
 ==============================================================================
-
-THE ONE LINE YOU NEED FIRST
----------------------------
-Install the X11/OpenGL libraries that raylib needs (one time per machine):
-
-    sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev \
-        libxcursor-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev
-
-WHERE to run it:
-  -> In the real TERMINAL app (Ubuntu's "Terminal"), NOT CLion's build window.
-     It needs your password, and CLion's build runner can't ask for one.
-  -> Equivalent shortcut: from the project folder run  `make system-deps`
-     (in a terminal it prompts for the password; launched from CLion it pops
-      a graphical password dialog).
-
-You only do this ONCE. After it, everything (including CLion) builds with no
-sudo and no prompts.
-
-
 ==============================================================================
  THE ORDER — DO THESE TOP TO BOTTOM
 ==============================================================================
@@ -28,13 +9,12 @@ ONE-TIME SETUP (once per computer / VM)
 ---------------------------------------
 1. Open the Terminal app.
 
-2. Install the system libraries (the line above):
+2. Install the system libraries:
        sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev \
            libxcursor-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev
 
-3. (Check it worked — both paths should print, no error:)
+3. (Check it worked)
        ls /usr/include/GL/gl.h /usr/include/X11/Xlib.h
-
 
 BUILD & RUN (every time after that)
 -----------------------------------
@@ -42,16 +22,13 @@ BUILD & RUN (every time after that)
        cd ~/CLionProjects/Linux_Project
 
 5. Build the full GUI simulator.
-   The FIRST build also downloads and compiles raylib (~1-2 min). After that
-   it is cached, so later builds take a couple seconds.
-       make milestone7
+      make milestone7
 
 6. Run it:
        ./sim -schd fcfs Graph.txt        (First-Come-First-Served)
    or  ./sim -schd sjf  Graph.txt        (Shortest-Job-First)
 
    In the window, click PLAY to start the travelers.
-
 
 OTHER BUILD TARGETS (optional)
 ------------------------------
@@ -60,7 +37,6 @@ OTHER BUILD TARGETS (optional)
    make clean                                 -> delete the binaries
    make distclean                             -> also delete downloaded raylib
    make setup                                 -> system-deps + prebuild raylib
-
 
 ==============================================================================
  IF SOMETHING GOES WRONG

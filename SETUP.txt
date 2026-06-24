@@ -62,7 +62,6 @@ OTHER BUILD TARGETS (optional)
 * `git checkout main` fails
       The branch is called master, not main:   git checkout master
 
-
 ==============================================================================
  EXAM DAY — GIT WORKFLOW
 ==============================================================================

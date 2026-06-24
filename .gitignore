@@ -21,3 +21,5 @@ dijkstra
 
 # macOS files
 .DS_Store
+# locally provisioned raylib (auto-downloaded by the Makefile)
+external/

@@ -108,8 +108,9 @@ static void skipCommentsWS(FILE *fp) {
 
 /* Which scheduling policy decides who enters a contested node first. */
 typedef enum {
-    SCHED_FCFS,   /* First Come First Served: earliest arrival wins           */
-    SCHED_SJF     /* Shortest Job First: smallest next-edge weight wins       */
+    SCHED_FCFS,
+    SCHED_SJF,
+    SCHED_PRIORITY
 } SchedulerType;
 
 /* One directed edge exactly as read from the graph file (for DRAWING only). */
@@ -213,7 +214,16 @@ typedef struct {
 
 /* Convert the scheduler enum to the text shown in the GUI side panel and title. */
 static const char *schedulerName(SchedulerType scheduler) {
-    return (scheduler == SCHED_SJF) ? "SJF" : "FCFS";
+    switch (scheduler) {
+        case SCHED_FCFS:
+            return "FCFS";
+        case SCHED_SJF:
+            return "SJF";
+        case SCHED_PRIORITY:
+            return "PRIORITY";
+        default:
+            return "UNKNOWN";
+    }
 }
 
 /* Reset every node queue so no traveler is occupying or waiting at startup/reset. */
@@ -252,18 +262,32 @@ static int pickNextTravelerIndex(const NodeQueue *nodeQueues, int node, Schedule
         const WaitingTraveler *cur  = &nodeQueues[node].queue[best];  /* current best */
 
         if (scheduler == SCHED_FCFS) {
+
             /* earlier arrival beats later arrival */
             if (cand->arrivalOrder < cur->arrivalOrder) {
                 best = i;
             }
-        } else {
+
+        }
+        else if (scheduler == SCHED_SJF) {
+
             /* SJF: lighter next edge wins; equal weight -> earlier arrival wins */
             if (cand->nextEdgeWeight < cur->nextEdgeWeight) {
                 best = i;
-            } else if (cand->nextEdgeWeight == cur->nextEdgeWeight &&
-                       cand->arrivalOrder < cur->arrivalOrder) {
+            }
+            else if (cand->nextEdgeWeight == cur->nextEdgeWeight &&
+                     cand->arrivalOrder < cur->arrivalOrder) {
+                best = i;
+                     }
+
+        }
+        else if (scheduler == SCHED_PRIORITY) {
+
+            /* Priority: lowest PID wins */
+            if (cand->pid < cur->pid) {
                 best = i;
             }
+
         }
     }
 

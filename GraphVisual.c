@@ -269,6 +269,43 @@ static int pickNextTravelerIndex(const NodeQueue *nodeQueues, int node, Schedule
 
     return best;
 }
+//helper function for test- print the vertex, which scheduler, who is waiting, who chosenn and why
+
+static void printSchedulerDecision(const NodeQueue *nodeQueues, int node,
+                                   SchedulerType scheduler, int chosenIdx) {
+    if (node < 0 || node >= MAX_VERTICES) return;
+    if (chosenIdx < 0 || chosenIdx >= nodeQueues[node].queueSize) return;
+
+    printf("\n=== Scheduler decision for node %d (%s) ===\n",
+           node, schedulerName(scheduler));
+
+    printf("Waiting travelers:\n");
+    for (int i = 0; i < nodeQueues[node].queueSize; i++) {
+        const WaitingTraveler *w = &nodeQueues[node].queue[i];
+        printf("  queue[%d] -> T%d | arrivalOrder=%lld | nextEdgeWeight=%d | nextNode=%d\n",
+               i,
+               w->travelerIndex + 1,
+               w->arrivalOrder,
+               w->nextEdgeWeight,
+               w->nextNode);
+    }
+
+    const WaitingTraveler *chosen = &nodeQueues[node].queue[chosenIdx];
+
+    if (scheduler == SCHED_FCFS) {
+        printf("Chosen traveler: T%d\n", chosen->travelerIndex + 1);
+        printf("Reason: FCFS selected the earliest arrivalOrder (%lld).\n",
+               chosen->arrivalOrder);
+    } else {
+        printf("Chosen traveler: T%d\n", chosen->travelerIndex + 1);
+        printf("Reason: SJF selected the smallest nextEdgeWeight (%d).\n",
+               chosen->nextEdgeWeight);
+        printf("Tie-break rule: if weights are equal, earliest arrivalOrder wins.\n");
+    }
+
+    printf("===========================================\n");
+    fflush(stdout);
+}
 
 /* Remove one waiting traveler from a node queue and compact the remaining entries. */
 static WaitingTraveler removeWaitingTraveler(NodeQueue *nodeQueues, int node, int idx) {
@@ -341,6 +378,9 @@ static void tryDispatchNextTraveler(NodeQueue *nodeQueues,
 
     int idx = pickNextTravelerIndex(nodeQueues, node, scheduler);
     if (idx < 0) return;
+
+    // printing the desition, who chosen , who wating, and why
+    printSchedulerDecision(nodeQueues, node, scheduler, idx);
 
     WaitingTraveler wt = removeWaitingTraveler(nodeQueues, node, idx);
 

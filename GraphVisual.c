@@ -109,7 +109,8 @@ static void skipCommentsWS(FILE *fp) {
 /* Which scheduling policy decides who enters a contested node first. */
 typedef enum {
     SCHED_FCFS,   /* First Come First Served: earliest arrival wins           */
-    SCHED_SJF     /* Shortest Job First: smallest next-edge weight wins       */
+    SCHED_SJF,    /* Shortest Job First: smallest next-edge weight wins       */
+    SCHED_PRIORITY /* smallest pid first*/
 } SchedulerType;
 
 /* One directed edge exactly as read from the graph file (for DRAWING only). */
@@ -213,7 +214,15 @@ typedef struct {
 
 /* Convert the scheduler enum to the text shown in the GUI side panel and title. */
 static const char *schedulerName(SchedulerType scheduler) {
-    return (scheduler == SCHED_SJF) ? "SJF" : "FCFS";
+    if (scheduler == SCHED_SJF) {
+        return "SJF";
+    }
+
+    if (scheduler == SCHED_PRIORITY) {
+        return "PRIORITY";
+    }
+
+    return "FCFS";
 }
 
 /* Reset every node queue so no traveler is occupying or waiting at startup/reset. */
@@ -240,30 +249,38 @@ static void enqueueTraveler(NodeQueue *nodeQueues, const WaitingTraveler *wt) {
 /* Choose the next traveler index to dispatch according to FCFS or SJF policy.
  * Returns an index INTO nodeQueues[node].queue (not a traveler index), or -1.
  * FCFS: pick the smallest arrivalOrder (whoever asked earliest).
- * SJF : pick the smallest nextEdgeWeight; ties broken by earliest arrival. */
+ * SJF : pick the smallest nextEdgeWeight; ties broken by earliest arrival.
+ * PRIORITY : pick the smallest pid of travelers */
 static int pickNextTravelerIndex(const NodeQueue *nodeQueues, int node, SchedulerType scheduler) {
     if (node < 0 || node >= MAX_VERTICES) return -1;
     if (nodeQueues[node].queueSize <= 0) return -1;
 
-    int best = 0;   /* assume the first waiter is best, then try to beat it */
+    int best = 0;
 
     for (int i = 1; i < nodeQueues[node].queueSize; i++) {
-        const WaitingTraveler *cand = &nodeQueues[node].queue[i];     /* candidate */
-        const WaitingTraveler *cur  = &nodeQueues[node].queue[best];  /* current best */
+        const WaitingTraveler *cand = &nodeQueues[node].queue[i];
+        const WaitingTraveler *cur  = &nodeQueues[node].queue[best];
 
         if (scheduler == SCHED_FCFS) {
-            /* earlier arrival beats later arrival */
             if (cand->arrivalOrder < cur->arrivalOrder) {
                 best = i;
             }
-        } else {
-            /* SJF: lighter next edge wins; equal weight -> earlier arrival wins */
+        }
+        else if (scheduler == SCHED_SJF) {
             if (cand->nextEdgeWeight < cur->nextEdgeWeight) {
                 best = i;
             } else if (cand->nextEdgeWeight == cur->nextEdgeWeight &&
                        cand->arrivalOrder < cur->arrivalOrder) {
                 best = i;
-            }
+                       }
+        }
+        else if (scheduler == SCHED_PRIORITY) {
+            if (cand->pid < cur->pid) {
+                best = i;
+            } else if (cand->pid == cur->pid &&
+                       cand->arrivalOrder < cur->arrivalOrder) {
+                best = i;
+                       }
         }
     }
 

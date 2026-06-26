@@ -5,7 +5,8 @@
 
 typedef enum {
     SCHED_FCFS,
-    SCHED_SJF
+    SCHED_SJF,
+    SCHED_PRIORITY
 } SchedulerType;
 
 /* declaration from GraphVisual.c */
@@ -15,8 +16,9 @@ static void printUsage(const char *progName) {
     fprintf(stderr,
             "Usage:\n"
             "  %s -schd fcfs <path-to-graph-file>\n"
-            "  %s -schd sjf <path-to-graph-file>\n",
-            progName, progName);
+            "  %s -schd sjf <path-to-graph-file>\n"
+            "  %s -schd priority <path-to-graph-file>\n",
+            progName, progName, progName);
 }
 
 int main(int argc, char *argv[]) {
@@ -37,6 +39,8 @@ int main(int argc, char *argv[]) {
         scheduler = SCHED_FCFS;
     } else if (strcmp(argv[2], "sjf") == 0) {
         scheduler = SCHED_SJF;
+    } else if (strcmp(argv[2], "priority") == 0) {
+        scheduler = SCHED_PRIORITY;
     } else {
         fprintf(stderr, "Unknown scheduler: %s\n", argv[2]);
         printUsage(argv[0]);

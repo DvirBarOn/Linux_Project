@@ -345,6 +345,17 @@ static void tryDispatchNextTraveler(NodeQueue *nodeQueues,
     WaitingTraveler wt = removeWaitingTraveler(nodeQueues, node, idx);
 
     if (wt.travelerIndex < 0 || wt.travelerIndex >= numTravelers) return;
+    /* Milestone 7: log every scheduling decision — who was chosen and why */
+    if (scheduler == SCHED_FCFS) {
+        printf("[SCHED %s] node %d -> traveler %d (PID %d) | reason: earliest arrival (order=%lld)\n",
+               schedulerName(scheduler), node, wt.travelerIndex,
+               travelers[wt.travelerIndex].pid, wt.arrivalOrder);
+    } else {
+        printf("[SCHED %s] node %d -> traveler %d (PID %d) | reason: shortest next edge (weight=%d)\n",
+               schedulerName(scheduler), node, wt.travelerIndex,
+               travelers[wt.travelerIndex].pid, wt.nextEdgeWeight);
+    }
+    fflush(stdout);
 
     nodeQueues[node].occupiedBy = wt.travelerIndex;
     nodeQueues[node].collecting = 0;

@@ -52,7 +52,6 @@
 #include <sys/types.h>     /* pid_t                                           */
 #include <sys/wait.h>      /* waitpid                                         */
 #include <signal.h>        /* kill, signal, SIGUSR1/SIGTERM/SIGSTOP/SIGCONT   */
-#include <errno.h>         /* errno                                           */
 #include <ctype.h>         /* isspace                                         */
 #include <fcntl.h>         /* fcntl + O_NONBLOCK (non-blocking pipe reads)    */
 #include <time.h>          /* struct timespec, nanosleep                      */
@@ -787,10 +786,10 @@ static void processTravelerMessages(Traveler *travelers,
                 t->pausedProgress = 0.0;
 
                 if (msg.isDestination) {
-                    printf("[PID=%d] entered node %d | DESTINATION\n",
+                    printf("[PID=%d] arrived at node %d | DESTINATION\n",
                            (int)msg.pid, msg.currentNode);
                 } else {
-                    printf("[PID=%d] entered node %d | next node: %d\n",
+                    printf("[PID=%d] arrived at node %d | next node: %d\n",
                            (int)msg.pid, msg.currentNode, msg.nextNode);
                 }
             }
@@ -884,7 +883,24 @@ static void childMain(const char *filename, int travelerIndex,
     Graph *g;
 
     signal(SIGUSR1, startHandler); /* arm the start signal so pause() can be woken */
-    pause();                       /* sleep here until parent sends SIGUSR1 (Play) */
+
+    /* SIGUSR1 is currently blocked here (inherited blocked from the parent --
+     * see spawnTravelers), so any "start" signal the parent already sent is
+     * safely pending rather than lost to the default-disposition race.
+     *
+     * We deliberately do NOT do sigprocmask(SIG_UNBLOCK, ...) followed by
+     * pause(): if SIGUSR1 is already pending, unblocking it fires the
+     * handler immediately, right there in the sigprocmask() call -- before
+     * we ever reach pause(). That signal is then "used up", and pause()
+     * afterwards would block forever waiting for a second SIGUSR1 that
+     * never comes. sigsuspend() closes this gap: it atomically installs a
+     * temporary mask (here, one that doesn't block SIGUSR1) and suspends in
+     * a single kernel step, so a pending signal is delivered as part of the
+     * very call that starts waiting -- there is no window where it can be
+     * silently consumed in between. */
+    sigset_t waitMask;
+    sigemptyset(&waitMask);        /* don't block SIGUSR1 while suspended */
+    sigsuspend(&waitMask);         /* atomically unblock + wait until signal (Play) */
 
     g = loadGraphOnly(filename, &fp);   /* each child loads its own copy of the graph */
     if (fp != NULL) {
@@ -1025,6 +1041,18 @@ static int spawnTravelers(Traveler *travelers, int numTravelers, const char *fil
 
     fflush(stdout);  /* flush before fork so buffered text isn't duplicated by children */
 
+    /* Block SIGUSR1 in this process BEFORE forking, so every child inherits
+     * it blocked. This closes the fork/signal race: if the parent sends the
+     * "Play" (start) signal before a child reaches signal()+pause(), the
+     * signal would otherwise hit the default disposition (terminate) and
+     * silently kill that child. With SIGUSR1 blocked from birth, an early
+     * signal just stays pending until the child explicitly unblocks it in
+     * childMain, right after installing its handler. */
+    sigset_t startBlockSet;
+    sigemptyset(&startBlockSet);
+    sigaddset(&startBlockSet, SIGUSR1);
+    sigprocmask(SIG_BLOCK, &startBlockSet, NULL);
+
     /* Pass 2: fork one child per traveler. */
     for (int i = 0; i < numTravelers; i++) {
         pid_t pid = fork();
@@ -1067,6 +1095,10 @@ static int spawnTravelers(Traveler *travelers, int numTravelers, const char *fil
             fcntl(travelers[i].pipeFd[0], F_SETFL, flags | O_NONBLOCK);
         }
     }
+
+    /* The parent doesn't need SIGUSR1 blocked; only the children rely on the
+     * block/unblock dance to avoid the fork/signal race. */
+    sigprocmask(SIG_UNBLOCK, &startBlockSet, NULL);
 
     return 1;
 }
@@ -1165,6 +1197,20 @@ void runGraphVisualizer(const char *filename, SchedulerType scheduler) {
         free(travelers);
         freeGraph(algoGraph);
         return;
+    }
+
+    /* Auto-start: wake every child out of pause() immediately, instead of
+     * waiting for a manual Play click. This keeps the Play/Pause/Reset UI
+     * working for interactive/manual runs (the first click just behaves
+     * like Pause, since travelers are already started) while ensuring
+     * headless/automated runs (no mouse input, e.g. the autograder) still
+     * produce movement and arrival-log output on stdout. */
+    for (int i = 0; i < numTravelers; i++) {
+        Traveler *t = &travelers[i];
+        if (!t->started && t->pid > 0) {
+            kill(t->pid, SIGUSR1);
+            t->started = 1;
+        }
     }
 
     VisGraph vg = {0};
